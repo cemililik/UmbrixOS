@@ -2,12 +2,12 @@
 
 - **Phase:** A
 - **Milestone:** A3 — Kernel objects
-- **Status:** Draft
+- **Status:** Ready
 - **Created:** 2026-04-21
 - **Author:** @cemililik
 - **Dependencies:** T-001 — Capability table foundation (must reach `Done`; A3 is blocked on A2 closure per [phase-a.md](../../../roadmap/phases/phase-a.md))
 - **Informs:** future tasks under Milestone A4 (IPC primitives) — IPC needs `Endpoint` and `Notification` kernel objects to dispatch against.
-- **ADRs required:** ADR-0016 (kernel object storage) — **Proposed** 2026-04-21, must be **Accepted** before implementation code lands.
+- **ADRs required:** ADR-0016 (kernel object storage) — **Accepted** 2026-04-21.
 
 ---
 
@@ -25,7 +25,7 @@ This task is **structure and lifecycle only**, not behaviour. The scheduler (A5)
 
 ## Acceptance criteria
 
-- [ ] **ADR-0016 Accepted.** Settles storage strategy (per-type arena vs. shared pool), handle type (generation-tagged or equivalent), ownership (global vs. per-task), and explicit-destruction semantics.
+- [x] **ADR-0016 Accepted.** Settles storage strategy (per-type arena vs. shared pool), handle type (generation-tagged or equivalent), ownership (global vs. per-task), and explicit-destruction semantics.
 - [ ] **Kernel-object module** `umbrix_kernel::obj` (or equivalent) with three types: `Task`, `Endpoint`, `Notification`. Minimal fields per ADR-0016; no scheduler / IPC logic.
 - [ ] **Per-type arenas** with bounded capacity (compile-time constants, revisited when a real use case demands more).
 - [ ] **Handle types** (`TaskHandle`, `EndpointHandle`, `NotificationHandle`) or a unified typed handle — whichever ADR-0016 chooses. Use-after-destroy structurally impossible (generation check, typed arena, or equivalent).
@@ -97,3 +97,4 @@ Sketch; real design in ADR-0016.
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-21 | @cemililik | opened; status Draft (A3 blocked until A2 Done) |
+| 2026-04-21 | @cemililik | A2 Done + A2 business review committed; status → Ready. ADR-0016 Accepted the same day; implementation may begin. |

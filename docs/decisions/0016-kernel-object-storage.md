@@ -1,6 +1,6 @@
 # 0016 — Kernel object storage
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-04-21
 - **Deciders:** @cemililik
 

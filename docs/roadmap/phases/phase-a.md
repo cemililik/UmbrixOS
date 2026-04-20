@@ -84,7 +84,7 @@ Introduce the first concrete kernel objects — `Task`, `Endpoint`, `Notificatio
 
 ### Tasks under A3
 
-- [T-002 — Kernel object storage foundation](../../analysis/tasks/phase-a/T-002-kernel-object-storage.md) — Draft (A3 blocked until A2 is Done).
+- [T-002 — Kernel object storage foundation](../../analysis/tasks/phase-a/T-002-kernel-object-storage.md) — Ready.
 
 ### Informs
 

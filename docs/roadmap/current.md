@@ -6,7 +6,7 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 
 - **Active phase:** A — Kernel core on QEMU `virt`.
 - **Active milestone:** A3 — Kernel objects.
-- **Active task:** [T-002 — Kernel object storage foundation](../analysis/tasks/phase-a/T-002-kernel-object-storage.md) (status: **Draft** — promoting to `Ready` / `In Progress` after the A2 business review).
+- **Active task:** [T-002 — Kernel object storage foundation](../analysis/tasks/phase-a/T-002-kernel-object-storage.md) (status: **Ready** — advancing to `In Progress` with the first implementation commit).
 - **Working branch:** `development`.
 - **Last completed milestone:** A2 — Capability table foundation, on 2026-04-21 (PR #1 merged to `main`).
 - **Last completed task:** [T-001 — Capability table foundation](../analysis/tasks/phase-a/T-001-capability-table-foundation.md) — `Done` 2026-04-21.
@@ -16,5 +16,5 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 ## Notes
 
 - The capability subsystem shipped in T-001: `cap::CapabilityTable`, `cap::CapHandle`, `cap::CapRights`, `cap::Capability`, `cap::CapError`, with zero `unsafe` and no heap. The module is not yet wired into `run`.
-- [ADR-0014](../decisions/0014-capability-representation.md) Accepted; [ADR-0016](../decisions/0016-kernel-object-storage.md) Proposed (will move to Accepted as part of T-002).
+- [ADR-0014](../decisions/0014-capability-representation.md) and [ADR-0016](../decisions/0016-kernel-object-storage.md) both Accepted; T-002 implementation may begin.
 - The maintainer updates this file when the active task changes. AI agents update it when they move a task to `In Progress` or `Done` via the [`start-task`](../../.claude/skills/start-task/SKILL.md) and [`conduct-review`](../../.claude/skills/conduct-review/SKILL.md) skills.
