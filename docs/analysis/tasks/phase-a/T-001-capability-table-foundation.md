@@ -2,7 +2,7 @@
 
 - **Phase:** A
 - **Milestone:** A2 — Capability table foundation
-- **Status:** In Progress
+- **Status:** In Review
 - **Created:** 2026-04-20
 - **Author:** @cemililik
 - **Dependencies:** none (Phase 4c — bootable kernel — is complete)
@@ -104,3 +104,4 @@ Every step keeps `cargo host-test` green.
 |------|----------|------|
 | 2026-04-20 | @cemililik | opened; status Ready |
 | 2026-04-20 | @cemililik | ADR-0014 Accepted; status → In Progress; work begins on `development` branch |
+| 2026-04-20 | @cemililik | implementation landed on `development`; status → In Review. 27 new host tests green on top of the existing 34 (61/61 total). |
