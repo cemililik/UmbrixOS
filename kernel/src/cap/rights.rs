@@ -27,19 +27,33 @@ impl CapRights {
     /// The bearer may include this capability in an IPC message (placeholder for A4).
     pub const TRANSFER: Self = Self(1 << 3);
 
+    /// Union of every bit defined by this version of the rights bitfield.
+    ///
+    /// Any bit outside this mask is reserved for future ADRs and is not a
+    /// valid rights flag today. ABI-boundary code constructs `CapRights`
+    /// through [`from_raw`][Self::from_raw], which silently masks reserved
+    /// bits away so an untrusted caller cannot smuggle unknown rights past
+    /// `contains` / subset checks.
+    pub const KNOWN_BITS: Self =
+        Self(Self::DUPLICATE.0 | Self::DERIVE.0 | Self::REVOKE.0 | Self::TRANSFER.0);
+
     /// Construct an empty flag set.
     #[must_use]
     pub const fn empty() -> Self {
         Self::EMPTY
     }
 
-    /// Construct a flag set from raw bits.
+    /// Construct a flag set from raw bits, masking away bits outside
+    /// [`KNOWN_BITS`][Self::KNOWN_BITS].
     ///
     /// Callers should prefer combining the named constants; `from_raw`
-    /// exists so higher layers can pass bits across ABI boundaries.
+    /// exists so higher layers can pass bits across ABI boundaries. Bits
+    /// outside `KNOWN_BITS` are reserved for future ADRs and are silently
+    /// dropped — a hostile or buggy caller cannot use them to weaken
+    /// [`contains`][Self::contains] or subset checks.
     #[must_use]
     pub const fn from_raw(bits: u32) -> Self {
-        Self(bits)
+        Self(bits & Self::KNOWN_BITS.0)
     }
 
     /// Return the raw bit pattern.
@@ -147,6 +161,17 @@ mod tests {
         let bits = 0b1011;
         let rights = CapRights::from_raw(bits);
         assert_eq!(rights.raw(), bits);
+    }
+
+    #[test]
+    fn from_raw_masks_unknown_bits() {
+        // Bit 31 is reserved; from_raw must drop it silently so no
+        // reserved bit survives as part of the resulting CapRights.
+        let rights = CapRights::from_raw(0x8000_0000 | CapRights::DUPLICATE.raw());
+        assert!(rights.contains(CapRights::DUPLICATE));
+        assert_eq!(rights.raw() & !CapRights::KNOWN_BITS.raw(), 0);
+        // A value built purely from reserved bits collapses to EMPTY.
+        assert!(CapRights::from_raw(0x8000_0000).is_empty());
     }
 
     #[test]

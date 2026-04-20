@@ -57,11 +57,29 @@ pub enum CapKind {
 
 /// Opaque reference to a kernel object.
 ///
-/// In v1 this is a plain `u64` identifier whose interpretation is left to
-/// the caller (kernel-internal). Milestone A3 replaces `CapObject` with a
-/// typed reference; the outer API of the capability table does not change.
+/// In v1 this wraps a plain `u64` identifier whose interpretation is left
+/// to the caller (kernel-internal). Milestone A3 replaces `CapObject` with
+/// a typed reference; the outer API of the capability table does not
+/// change. The wrapped value is kept private and read through
+/// [`CapObject::raw`] so that every construction or inspection site goes
+/// through an auditable function — a small safeguard for when the typed
+/// replacement lands.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct CapObject(pub u64);
+pub struct CapObject(u64);
+
+impl CapObject {
+    /// Construct a capability-object reference from its raw identifier.
+    #[must_use]
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Return the raw identifier this `CapObject` wraps.
+    #[must_use]
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
 
 /// A capability.
 ///
@@ -133,4 +151,8 @@ pub enum CapError {
     /// `cap_derive` would produce a capability whose depth exceeds
     /// [`MAX_DERIVATION_DEPTH`].
     DerivationTooDeep,
+    /// `cap_drop` was called on a capability that still has descendants.
+    /// The caller must `cap_revoke` the subtree first so orphaned
+    /// children cannot outlive their parent.
+    HasChildren,
 }

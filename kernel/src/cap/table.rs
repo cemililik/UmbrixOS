@@ -245,13 +245,15 @@ impl CapabilityTable {
         new_rights: CapRights,
         new_object: super::CapObject,
     ) -> Result<CapHandle, CapError> {
+        // `entry_of` already validates the handle and resolves to a live
+        // slot; its input handle gives us the index we need for the new
+        // entry's `parent` link without a second `resolve_handle` call.
         let (kind, rights, parent_index, parent_depth) = {
             let entry = self.entry_of(src)?;
-            let idx = self.resolve_handle(src)?;
             (
                 entry.capability.kind(),
                 entry.capability.rights(),
-                idx,
+                src.index,
                 entry.depth,
             )
         };
@@ -323,6 +325,16 @@ impl CapabilityTable {
         }
 
         // Collect descendants via BFS on a fixed-size scratch array.
+        //
+        // Invariant: the derivation tree is rooted at a slot in this
+        // table and can contain at most `CAP_TABLE_CAPACITY - 1`
+        // descendants (the root itself is excluded from the queue). If
+        // either `desc_len` bound check below fires at runtime, it means
+        // the tree has a cycle or a duplicate node — an internal bug in
+        // the table's bookkeeping, not a user-visible capacity issue.
+        // The `debug_assert!` surfaces that bug in tests; in release
+        // builds the extra entries are simply skipped so a bug cannot be
+        // escalated to a revocation that silently fails to free memory.
         let mut descendants = [0 as Index; CAP_TABLE_CAPACITY];
         let mut desc_len: usize = 0;
 
@@ -332,9 +344,12 @@ impl CapabilityTable {
             None => return Err(CapError::InvalidHandle),
         };
         while let Some(c) = child {
+            debug_assert!(
+                desc_len < CAP_TABLE_CAPACITY,
+                "derivation tree contains a cycle or duplicate node"
+            );
             if desc_len >= CAP_TABLE_CAPACITY {
-                // Should be unreachable since descendants ≤ table size.
-                return Err(CapError::CapsExhausted);
+                break;
             }
             descendants[desc_len] = c;
             desc_len = desc_len.saturating_add(1);
@@ -353,8 +368,12 @@ impl CapabilityTable {
                 None => None,
             };
             while let Some(g) = gc {
+                debug_assert!(
+                    desc_len < CAP_TABLE_CAPACITY,
+                    "derivation tree contains a cycle or duplicate node"
+                );
                 if desc_len >= CAP_TABLE_CAPACITY {
-                    return Err(CapError::CapsExhausted);
+                    break;
                 }
                 descendants[desc_len] = g;
                 desc_len = desc_len.saturating_add(1);
@@ -382,11 +401,30 @@ impl CapabilityTable {
     /// Release the capability at `handle` from this table. Peers and
     /// siblings are unaffected; only the slot itself is freed.
     ///
+    /// The caller must first revoke any descendants with `cap_revoke`:
+    /// dropping an interior node would orphan its children and violate
+    /// the derivation-tree invariant from [ADR-0014][adr-0014]. The
+    /// conservative choice of refusing to drop interior nodes keeps the
+    /// contract auditable and leaves cascade semantics to `cap_revoke`.
+    ///
+    /// [adr-0014]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0014-capability-representation.md
+    ///
     /// # Errors
     ///
-    /// Returns [`CapError::InvalidHandle`] if `handle` is stale.
+    /// - [`CapError::InvalidHandle`] if `handle` is stale.
+    /// - [`CapError::HasChildren`] if the capability still has at least
+    ///   one derived descendant in this table.
     pub fn cap_drop(&mut self, handle: CapHandle) -> Result<(), CapError> {
         let index = self.resolve_handle(handle)?;
+
+        let has_children = match &self.slots[index as usize].entry {
+            Some(entry) => entry.first_child.is_some(),
+            None => return Err(CapError::InvalidHandle),
+        };
+        if has_children {
+            return Err(CapError::HasChildren);
+        }
+
         self.unlink_from_siblings(index)?;
         self.free_slot(index);
         Ok(())
@@ -517,7 +555,7 @@ mod tests {
     }
 
     fn root_cap() -> Capability {
-        Capability::new(CapKind::Task, all_rights(), CapObject(0xAA))
+        Capability::new(CapKind::Task, all_rights(), CapObject::new(0xAA))
     }
 
     #[test]
@@ -527,7 +565,7 @@ mod tests {
         let cap = t.lookup(h).unwrap();
         assert_eq!(cap.kind(), CapKind::Task);
         assert_eq!(cap.rights(), all_rights());
-        assert_eq!(cap.object(), CapObject(0xAA));
+        assert_eq!(cap.object(), CapObject::new(0xAA));
     }
 
     #[test]
@@ -583,7 +621,7 @@ mod tests {
     #[test]
     fn cap_copy_rejects_widened_rights() {
         let mut t = CapabilityTable::new();
-        let narrow = Capability::new(CapKind::Task, CapRights::DUPLICATE, CapObject(0));
+        let narrow = Capability::new(CapKind::Task, CapRights::DUPLICATE, CapObject::new(0));
         let src = t.insert_root(narrow).unwrap();
         let wider = CapRights::DUPLICATE | CapRights::REVOKE;
         assert_eq!(t.cap_copy(src, wider).unwrap_err(), CapError::WidenedRights);
@@ -592,7 +630,7 @@ mod tests {
     #[test]
     fn cap_copy_without_duplicate_right_fails() {
         let mut t = CapabilityTable::new();
-        let no_dup = Capability::new(CapKind::Task, CapRights::DERIVE, CapObject(0));
+        let no_dup = Capability::new(CapKind::Task, CapRights::DERIVE, CapObject::new(0));
         let src = t.insert_root(no_dup).unwrap();
         assert_eq!(
             t.cap_copy(src, CapRights::EMPTY).unwrap_err(),
@@ -605,19 +643,21 @@ mod tests {
         let mut t = CapabilityTable::new();
         let src = t.insert_root(root_cap()).unwrap();
         let child_rights = CapRights::DUPLICATE;
-        let child = t.cap_derive(src, child_rights, CapObject(0xBB)).unwrap();
+        let child = t
+            .cap_derive(src, child_rights, CapObject::new(0xBB))
+            .unwrap();
         let child_cap = t.lookup(child).unwrap();
         assert_eq!(child_cap.rights(), child_rights);
-        assert_eq!(child_cap.object(), CapObject(0xBB));
+        assert_eq!(child_cap.object(), CapObject::new(0xBB));
     }
 
     #[test]
     fn cap_derive_without_derive_right_fails() {
         let mut t = CapabilityTable::new();
-        let no_derive = Capability::new(CapKind::Task, CapRights::DUPLICATE, CapObject(0));
+        let no_derive = Capability::new(CapKind::Task, CapRights::DUPLICATE, CapObject::new(0));
         let src = t.insert_root(no_derive).unwrap();
         assert_eq!(
-            t.cap_derive(src, CapRights::EMPTY, CapObject(0))
+            t.cap_derive(src, CapRights::EMPTY, CapObject::new(0))
                 .unwrap_err(),
             CapError::InsufficientRights
         );
@@ -626,11 +666,11 @@ mod tests {
     #[test]
     fn cap_derive_rejects_widened_rights() {
         let mut t = CapabilityTable::new();
-        let narrow = Capability::new(CapKind::Task, CapRights::DERIVE, CapObject(0));
+        let narrow = Capability::new(CapKind::Task, CapRights::DERIVE, CapObject::new(0));
         let src = t.insert_root(narrow).unwrap();
         let wider = CapRights::DERIVE | CapRights::REVOKE;
         assert_eq!(
-            t.cap_derive(src, wider, CapObject(0)).unwrap_err(),
+            t.cap_derive(src, wider, CapObject::new(0)).unwrap_err(),
             CapError::WidenedRights
         );
     }
@@ -642,10 +682,12 @@ mod tests {
         // Build MAX_DERIVATION_DEPTH-deep chain (each child gets DERIVE so we
         // can go again); the next derive should fail.
         for _ in 0..MAX_DERIVATION_DEPTH {
-            current = t.cap_derive(current, all_rights(), CapObject(0)).unwrap();
+            current = t
+                .cap_derive(current, all_rights(), CapObject::new(0))
+                .unwrap();
         }
         assert_eq!(
-            t.cap_derive(current, all_rights(), CapObject(0))
+            t.cap_derive(current, all_rights(), CapObject::new(0))
                 .unwrap_err(),
             CapError::DerivationTooDeep
         );
@@ -655,7 +697,7 @@ mod tests {
     fn cap_revoke_removes_only_descendants() {
         let mut t = CapabilityTable::new();
         let src = t.insert_root(root_cap()).unwrap();
-        let child = t.cap_derive(src, all_rights(), CapObject(1)).unwrap();
+        let child = t.cap_derive(src, all_rights(), CapObject::new(1)).unwrap();
 
         t.cap_revoke(src).unwrap();
 
@@ -671,9 +713,13 @@ mod tests {
     fn cap_revoke_cascades_depth_three() {
         let mut t = CapabilityTable::new();
         let root = t.insert_root(root_cap()).unwrap();
-        let child = t.cap_derive(root, all_rights(), CapObject(1)).unwrap();
-        let grand = t.cap_derive(child, all_rights(), CapObject(2)).unwrap();
-        let great = t.cap_derive(grand, all_rights(), CapObject(3)).unwrap();
+        let child = t.cap_derive(root, all_rights(), CapObject::new(1)).unwrap();
+        let grand = t
+            .cap_derive(child, all_rights(), CapObject::new(2))
+            .unwrap();
+        let great = t
+            .cap_derive(grand, all_rights(), CapObject::new(3))
+            .unwrap();
 
         t.cap_revoke(root).unwrap();
 
@@ -689,7 +735,7 @@ mod tests {
         let no_revoke = Capability::new(
             CapKind::Task,
             CapRights::DUPLICATE | CapRights::DERIVE,
-            CapObject(0),
+            CapObject::new(0),
         );
         let src = t.insert_root(no_revoke).unwrap();
         assert_eq!(t.cap_revoke(src).unwrap_err(), CapError::InsufficientRights);
@@ -715,7 +761,7 @@ mod tests {
     fn copy_of_a_child_shares_parent() {
         let mut t = CapabilityTable::new();
         let root = t.insert_root(root_cap()).unwrap();
-        let child = t.cap_derive(root, all_rights(), CapObject(1)).unwrap();
+        let child = t.cap_derive(root, all_rights(), CapObject::new(1)).unwrap();
         let peer = t.cap_copy(child, all_rights()).unwrap();
 
         // Revoking `root` must invalidate both `child` and `peer` — they
@@ -754,14 +800,35 @@ mod tests {
     }
 
     #[test]
+    fn cap_drop_on_interior_node_returns_has_children() {
+        // Root has at least one derived child — dropping the root must
+        // refuse rather than orphan the child.
+        let mut t = CapabilityTable::new();
+        let parent = t.insert_root(root_cap()).unwrap();
+        let _child = t
+            .cap_derive(parent, all_rights(), CapObject::new(1))
+            .unwrap();
+
+        assert_eq!(
+            t.cap_drop(parent).unwrap_err(),
+            CapError::HasChildren,
+            "dropping an interior node must refuse to orphan descendants"
+        );
+
+        // Revoking first, then dropping, works.
+        t.cap_revoke(parent).unwrap();
+        assert!(t.cap_drop(parent).is_ok());
+    }
+
+    #[test]
     fn drop_middle_sibling_preserves_list_integrity() {
         // Build three peers under a root and drop the middle one; the
         // outer two must remain reachable.
         let mut t = CapabilityTable::new();
         let root = t.insert_root(root_cap()).unwrap();
-        let a = t.cap_derive(root, all_rights(), CapObject(1)).unwrap();
-        let b = t.cap_derive(root, all_rights(), CapObject(2)).unwrap();
-        let c = t.cap_derive(root, all_rights(), CapObject(3)).unwrap();
+        let a = t.cap_derive(root, all_rights(), CapObject::new(1)).unwrap();
+        let b = t.cap_derive(root, all_rights(), CapObject::new(2)).unwrap();
+        let c = t.cap_derive(root, all_rights(), CapObject::new(3)).unwrap();
         t.cap_drop(b).unwrap();
         assert!(t.lookup(a).is_ok());
         assert!(t.lookup(c).is_ok());
