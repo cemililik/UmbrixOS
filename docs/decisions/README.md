@@ -38,6 +38,7 @@ Each ADR contains:
 | 0007 | [Console HAL trait signature](0007-console-trait.md) | Accepted | 2026-04-20 |
 | 0008 | [Cpu HAL trait signature (v1, single-core scope)](0008-cpu-trait.md) | Accepted | 2026-04-20 |
 | 0009 | [Mmu HAL trait signature (v1)](0009-mmu-trait.md) | Accepted | 2026-04-20 |
+| 0010 | [Timer HAL trait signature (v1)](0010-timer-trait.md) | Accepted | 2026-04-20 |
 
 ## Creating a new ADR
 
