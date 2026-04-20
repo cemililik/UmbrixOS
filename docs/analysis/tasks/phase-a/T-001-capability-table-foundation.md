@@ -2,12 +2,12 @@
 
 - **Phase:** A
 - **Milestone:** A2 — Capability table foundation
-- **Status:** Ready
+- **Status:** In Progress
 - **Created:** 2026-04-20
 - **Author:** @cemililik
 - **Dependencies:** none (Phase 4c — bootable kernel — is complete)
 - **Informs:** future tasks under Milestones A3 (kernel objects) and A4 (IPC primitives)
-- **ADRs required:** ADR-0014 (capability representation) must be Accepted before implementation code lands.
+- **ADRs required:** ADR-0014 (capability representation) — **Accepted** 2026-04-20.
 
 ---
 
@@ -103,3 +103,4 @@ Every step keeps `cargo host-test` green.
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-20 | @cemililik | opened; status Ready |
+| 2026-04-20 | @cemililik | ADR-0014 Accepted; status → In Progress; work begins on `development` branch |
