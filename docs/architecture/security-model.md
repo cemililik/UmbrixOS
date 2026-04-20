@@ -26,6 +26,7 @@ A threat model is the contract between what the system defends and what the syst
 4. **Developer error during implementation.** A large class of memory-safety bugs is made structurally impossible by Rust's type system; the remaining `unsafe` surface is audited (see [unsafe-policy.md](../standards/unsafe-policy.md)).
 5. **Accidental privilege escalation** via interaction between subsystems. Capability-based authority makes it structurally difficult for code to acquire authority it was never granted.
 6. **Network adversaries at task boundaries.** Once a network service exists, it must assume it is talking to an adversary. The kernel is not on the network path; the network task is a userspace compartment.
+7. **Buggy or compromised bus-mastering peripherals, on platforms with an IOMMU.** A device that can issue bus-master DMA (USB host controller, network card, storage controller, DMA engine) is an independent principal on the bus, distinct from the task that drives it. On a platform with an IOMMU (SMMU on ARM), Umbrix scopes each device's DMA to only the regions its driver's `MemoryRegionCap` covers. Without an IOMMU, capability protection only constrains CPU access — the device can read or write any DRAM the bus reaches. Platforms without an IOMMU are explicitly noted under *out of scope* below; the build is documented as trusting its bus masters.
 
 #### Assumed attacker capabilities
 
@@ -55,7 +56,8 @@ These are *out of scope* in the current model. Being explicit means that when a 
 - **Compromise of the maintainer's signing key.** Trust ultimately roots somewhere; the maintainer's key is that root for releases. Key compromise is handled by rotation per [release.md](../standards/release.md), not by design within the running system.
 - **Social engineering of contributors or operators.** Out of scope — human process, not system property.
 - **Rowhammer and other DRAM-level attacks.** Out of scope pending targeted mitigations.
-- **Denial of service through resource exhaustion inside the scheduler's budget.** Scheduling policy defends against runaway tasks via priority and quotas (design pending); outright DoS mitigation is a deployment concern, not a kernel one.
+- **Denial of service through resource exhaustion at the deployment level.** A bad actor flooding a network port or saturating CPU from outside is a deployment concern (firewall, rate-limit upstream). The kernel's *internal* bounds against local resource exhaustion are a different matter and are in scope — see *Bounded kernel resources* below.
+- **Peripheral DMA on boards without an IOMMU.** Raspberry Pi 4 has no SMMU: any bus-master device that the kernel has enabled can, in principle, read or write arbitrary DRAM. QEMU `virt` can be launched with SMMUv3 and is used in CI to catch driver-side misbehaviour against SMMU semantics. Jetson Orin has an SMMU and is in scope once that port lands. Until an ADR brings a no-IOMMU board into the model with explicit mitigations (physical-contract trust, driver constraint, device disablement), such boards trust their bus masters implicitly and release notes record this per target.
 
 ### Trust boundaries
 
@@ -76,11 +78,13 @@ flowchart LR
     end
     subgraph HW["Hardware"]
         Dev["Devices · MMIO"]
+        RAM["Physical RAM"]
     end
     TaskA <-- syscall --> Kernel
     TaskB <-- syscall --> Kernel
     TaskA <-. IPC via EndpointCap .-> TaskB
     TaskA <-. MMIO via MemoryCap .-> Dev
+    Dev -.->|"DMA (IOMMU-gated where present)"| RAM
     Kernel -- trap / IRQ --> Kernel
 ```
 
@@ -92,10 +96,27 @@ The boundaries, enumerated:
 4. **Task ↔ hardware (MMIO boundary).** A task accesses a device's registers only through a `MemoryRegionCap` whose range matches the device's MMIO region.
 5. **Task ↔ interrupt (IRQ boundary).** Only the holder of an `IrqCap` for a given line can acknowledge that interrupt.
 6. **Boot → kernel (pre-kernel handoff).** The kernel validates the boot information handed to it by the BSP's early-init code. Anything beyond this is in the pre-kernel trust chain, which is out of scope until measured boot is implemented.
+7. **Device ↔ physical memory (DMA boundary).** A peripheral capable of bus-master DMA is a principal on the bus independent of the task that drives it. On platforms with an IOMMU (SMMU), the device's DMA authority is restricted by the kernel to regions corresponding to the driver's `MemoryRegionCap`; the same capability that gates a driver's MMIO is what the kernel uses to program the IOMMU. On platforms without an IOMMU, this boundary exists in principle but is not enforced by hardware — the build explicitly trusts its bus masters. The capability system reaches as far as the IOMMU does.
 
 ### Capabilities
 
 A capability in Umbrix is an **unforgeable kernel-held token** that authorizes a specific operation on a specific kernel object. It is the only way authority flows in the system.
+
+#### Why capabilities — the confused deputy problem
+
+Capabilities are not a stylistic preference. They are the fix for a concrete class of bug that ambient-authority systems suffer structurally: the **confused deputy problem**.
+
+Classic illustration: a compiler binary runs with elevated privilege so it can write compiled output into a privileged directory. A user invokes it: `mycompiler --output /etc/shadow src/`. The compiler has the authority (it runs elevated). The caller supplies the target. The compiler dutifully writes the output to `/etc/shadow`. It is *confused* about whose authority it is acting on — the user called it, but it acted with its own.
+
+Every POSIX-style system has structural versions of this problem, mitigated over decades by fragile conventions (path sanitization, `chroot`, `SELinux`, capability-like `CAP_*` masks grafted onto a fundamentally ambient-authority base). Each convention is a response to a concrete failure; the failures do not stop because the root cause — *authority travels with the principal, not with the target* — is never addressed.
+
+A capability system eliminates the confusion by construction:
+
+- Authority does not belong to *who you are*. It belongs to *what capability you hold*.
+- To write to `/var/lib/output/`, the caller must present a capability that names that region. If they pass `/etc/shadow` instead, they either hold the capability to write there (in which case the operation is legitimate) or they do not (in which case the call fails with no side effect).
+- The "compiler" has no extra privilege to be confused about. It has exactly the authority the caller handed it — no more, no less.
+
+Every design choice in Umbrix's security model descends from this: if authority always travels with the object, not with the principal, whole categories of vulnerability become structurally impossible. Path traversal into privileged directories, SUID-binary shenanigans, "service runs as root so anyone who talks to it gets root's power" — these are not bugs Umbrix patches; they are bugs the Umbrix model cannot express in the first place.
 
 #### What a capability is, at the implementation level
 
@@ -194,6 +215,27 @@ Faults are where security models are tested. Umbrix's approach is summarized in 
 
 No kernel path turns a userspace fault into privilege escalation: the capabilities the faulting task held are dropped as part of its termination.
 
+### Bounded kernel resources
+
+Denial of service at the deployment level — a bad actor flooding a public port or saturating CPU from outside — is a deployment concern and is listed out of scope above. But the *kernel's own resources* must not be exhaustible by a single task. A task that can wedge the kernel has, in practice, escalated: the rest of the system stops working at its pleasure. The kernel therefore enforces two disciplines.
+
+1. **Every kernel object has a compile-time upper bound on its size.** Capability tables, endpoint queues, notification bit-fields, task structures, TLB-shootdown batches, scheduler run-queues — each has a configured maximum built into the kernel image, with an explicit per-task or global quota. No kernel data structure grows without bound.
+2. **Every allocation path returns a typed error; no allocation path panics.** When a task tries to install a capability in a full table, or send a message that would overflow an endpoint's queue, the syscall returns a specific error (`CapsExhausted`, `QueueFull`, `OutOfFrames`, `TasksExhausted`). The task handles it. The kernel survives. Panic on resource exhaustion would be a bug.
+
+Concrete bounds — specific values fixed per board in the BSP, not per kernel build in general:
+
+| Resource | Bound | Failure mode |
+|----------|-------|--------------|
+| Capability table entries per task | configured at task creation | `cap_copy` / IPC receive returns `CapsExhausted` |
+| Endpoint send-wait queue length | per-endpoint quota | `send` returns `QueueFull` in non-blocking mode; blocks in blocking mode |
+| Notification bit-field | 64 bits | saturate-on-set; `notify` cannot fail from overflow |
+| Pending-IPC fast-path slots | per-CPU bound | fall back to full rendezvous path |
+| Task count | global | `task_create` returns `TasksExhausted` |
+| Physical frame allocator | total RAM | `frame_alloc` returns `OutOfFrames` |
+| Scheduler run-queue depth | per-priority | enqueue fails at creation, not at steady state |
+
+A deliberately malicious task cannot turn "my allocation failed" into "the kernel crashed." The security model promises this. The scheduler, quota system, and the [error-handling standard](../standards/error-handling.md) enforce it together.
+
 ### Side channels
 
 Side-channel attacks exploit information leakage through mechanisms the functional correctness of the system does not mention — cache timing, branch prediction, speculation, shared microarchitecture. Umbrix's current posture:
@@ -251,6 +293,8 @@ These are the load-bearing properties of the security model. Every implementatio
 - **`unsafe` is audited.** Every `unsafe` block in the tree has a `SAFETY:` comment, an audit-log entry, and a security reviewer sign-off per [unsafe-policy.md](../standards/unsafe-policy.md).
 - **No proprietary binary blobs in the kernel.** Every byte linked into the privileged image is either project source or an audited open-source dependency.
 - **Fault containment does not leak authority.** A task's capabilities are dropped when it is terminated; the supervisor receives only the fault descriptor, not the capabilities.
+- **Bounded kernel state.** Every kernel data structure has a compile-time maximum size; no kernel path allocates without bound. Resource exhaustion surfaces as a typed error to the caller, never as a kernel panic, stall, or unbounded memory growth.
+- **DMA is capability-scoped where the hardware permits.** On platforms with an IOMMU (SMMU), peripheral DMA is gated by the same capability that grants a driver its MMIO region. On platforms without an IOMMU, the build is explicitly documented as trusting its bus masters, and release notes record this per target.
 
 ## Trade-offs
 
@@ -275,6 +319,8 @@ Each of these is a future ADR.
 - First cryptographic primitives: hash function, signature scheme, AEAD — per-primitive ADR when the need arises.
 - Measured / secure boot design for Tier 2 hardware (Pi 4, Pi 5) and Tier 3 (Jetson).
 - Resource-exhaustion DoS policy within the scheduler (quotas, priority inheritance, deadline inheritance).
+- **IOMMU / SMMU policy per target.** Raspberry Pi 4 has no SMMU — do we accept implicit trust of all enabled bus masters, refuse to enable DMA-capable devices and force PIO, or gate DMA-capable devices behind a deployment-time opt-in? QEMU `virt` has SMMUv3 and should be the CI gate that catches driver regressions against IOMMU expectations. Jetson Orin has an SMMU and adopts the same model when its port lands. ADR required before the first driver that enables bus-master DMA.
+- **Concrete bounds** for the quotas under *Bounded kernel resources*: numeric defaults for each, per-target tuning policy, and how upgrades change them without invalidating running systems.
 
 ## References
 
