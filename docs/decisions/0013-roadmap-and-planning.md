@@ -19,7 +19,7 @@ This ADR establishes the roadmap and analysis system: where the plan lives, wher
 - **Repo-native.** External tools (Trello, Linear, GitHub Projects) are not part of the ground truth.
 - **Per-phase task folders.** Each phase has its own directory under `docs/analysis/tasks/`, so a phase's tasks are read together and ID collisions between phases are obvious.
 - **Typed reviews.** Reviews fall into four distinct concerns — business (milestone retrospectives), code (per-change quality), security (deep pass on sensitive changes), performance (optimization cycles). Each lives under its own directory with a **master plan** describing the procedure in enough detail that multiple agents can work on pieces in parallel.
-- **Task-as-user-story.** Each concrete unit of work is a short markdown document in a consistent format. The three-part narrative (role, capability, benefit) is flexible enough for kernel-internal work where the "user" is another subsystem.
+- **Task-as-user-story.** Each concrete unit of work is a short Markdown document in a consistent format. The three-part narrative (role, capability, benefit) is flexible enough for kernel-internal work where the "user" is another subsystem.
 - **Robust to long pauses.** A maintainer returning after months must be able to read `docs/roadmap/current.md` and immediately know what they were doing and why.
 - **Orthogonal to ADRs.** The roadmap sequences work; architectural decisions *inside* tasks still go through ADRs.
 - **Split roadmap vs. analysis.** `docs/roadmap/` holds the plan — what we *intend* to do, in what order. `docs/analysis/` holds the work — individual tasks as they move through the pipeline, and reviews as they are conducted. The two are cross-linked but separate so the plan does not drown in execution detail.
@@ -38,7 +38,7 @@ This ADR establishes the roadmap and analysis system: where the plan lives, wher
 
 ### Folder layout
 
-```
+```text
 docs/
 ├── roadmap/                   — the plan, in order of execution
 │   ├── README.md              — purpose, conventions, quick-navigation

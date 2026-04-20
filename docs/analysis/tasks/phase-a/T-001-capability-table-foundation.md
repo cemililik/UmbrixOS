@@ -26,7 +26,7 @@ This task deliberately stops short of introducing the kernel objects capabilitie
 ## Acceptance criteria
 
 - [ ] **ADR-0014 Accepted.** Defines: in-kernel capability representation (struct layout, rights bits, object-reference encoding), handle type exposed to callers, derivation-tree storage (intrusive vs. index-based), per-task bound on table size, and the error type for operations.
-- [ ] **`CapabilityTable` type** in a new `umbrix-kernel::cap` module. Bounded capacity (compile-time or per-instance), no heap allocation.
+- [ ] **`CapabilityTable` type** in a new `umbrix_kernel::cap` module. Bounded capacity (compile-time or per-instance), no heap allocation.
 - [ ] **`Capability` type** (enum or struct with a kind field) covering the v1 placeholder variants. Concrete object references are placeholders until Milestone A3 replaces them — the point is the *table's* correctness, not the objects'.
 - [ ] **Rights** (`CapRights` or similar) represented as a bitfield with the operations exposed so far: duplicate, derive, revoke, transfer-on-IPC (placeholder — no IPC yet).
 - [ ] **Handle-based access.** Callers receive a `CapHandle` (opaque index); raw capability bits are never exposed.
@@ -62,7 +62,7 @@ Two top-level shape decisions will be pinned in ADR-0014:
 Implementation order within the task:
 
 1. Write ADR-0014.
-2. Introduce the module skeleton: `umbrix-kernel::cap` with just the type definitions and docs.
+2. Introduce the module skeleton: `umbrix_kernel::cap` with just the type definitions and docs.
 3. Implement `cap_drop` first (simplest; touches only the table).
 4. Implement `cap_copy` (narrowing of rights).
 5. Implement `cap_derive` (narrowing of scope, parent/child linkage).

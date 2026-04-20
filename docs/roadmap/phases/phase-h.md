@@ -38,11 +38,11 @@ NVIDIA Jetson Orin Nano / Orin NX / AGX Orin as aarch64 boards. Per [ADR-0004](.
 
 - ADR-0053 Accepted.
 - A Jetson board boots Umbrix to the Phase A / B exit bar.
-- Release notes are explicit: Jetson's GPU / NPU are not accessible.
+- Release notes are explicit: Jetson's GPU / NPU are inaccessible.
 
 ## Milestone H3 — First RISC-V BSP
 
-Candidate: an ESP32-C6 or SiFive HiFive board. The first non-aarch64 target — validates that `Cpu`, `Mmu`, `IrqController`, `Timer` abstract correctly across architectures.
+Candidate: an MMU-capable RISC-V board — e.g., a SiFive HiFive Unmatched / Unleashed or a StarFive VisionFive 2. The first non-aarch64 target — validates that `Cpu`, `Mmu`, `IrqController`, `Timer` abstract correctly across architectures. MMU-less RISC-V microcontrollers (ESP32-C6, ESP32-C3, RP2350-RISCV, etc.) are deliberately out of scope for H3 because they cannot exercise the `Mmu` trait; if a future ADR decides to cover no-MMU targets, that is a separate milestone with its own acceptance criteria.
 
 ### Sub-breakdown
 
@@ -58,7 +58,7 @@ Candidate: an ESP32-C6 or SiFive HiFive board. The first non-aarch64 target — 
 
 ### Phase H closure
 
-Business review. The HAL abstraction has been tested by three architecturally distinct targets (Pi 4, Jetson, RISC-V); any leaks in the abstraction surface here.
+Business review. The HAL abstraction has been tested by three architecturally distinct targets (Pi 5, Jetson, RISC-V); any leaks in the abstraction surface here.
 
 ## ADR ledger for Phase H
 

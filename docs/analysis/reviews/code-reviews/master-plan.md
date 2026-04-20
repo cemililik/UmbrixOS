@@ -51,9 +51,9 @@ Before starting, the reviewer determines the change's risk class:
 **Task:** are the tests adequate?
 
 - Is the public API of the change exercised?
-- If the change is a fix, is there a regression test that fails before and passes after?
-- If a new `Error` variant was added, is there a test that provokes it?
-- If the change is behavioural, is there a QEMU smoke that demonstrates the behaviour?
+- For a fix, confirm that a regression test fails before the patch and passes after.
+- When a new `Error` variant is added, ensure a test provokes it.
+- Behavioural changes need a QEMU smoke that demonstrates the behaviour end-to-end.
 - What is missing? Be specific about what a good test would look like.
 
 **Output:** `Test coverage` section — list of tests present and list of tests missing.
