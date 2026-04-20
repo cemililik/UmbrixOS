@@ -82,6 +82,10 @@ Introduce the first concrete kernel objects — `Task`, `Endpoint`, `Notificatio
 - No heap; kernel objects live in a bounded pool per type.
 - Host tests for lifecycle and handle invalidation pass.
 
+### Tasks under A3
+
+- [T-002 — Kernel object storage foundation](../../analysis/tasks/phase-a/T-002-kernel-object-storage.md) — Draft (A3 blocked until A2 is Done).
+
 ### Informs
 
 Milestone A4 builds the actual IPC paths against the `Endpoint` and `Notification` objects introduced here.
