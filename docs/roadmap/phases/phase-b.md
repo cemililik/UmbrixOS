@@ -14,14 +14,14 @@ Extend the BSP reset stub so that when QEMU delivers us at EL2, we configure `HC
 
 ### Sub-breakdown
 
-1. **ADR-0020 — EL drop policy.** Always-to-EL1 vs. keep-whichever. When does the drop happen (earliest possible; before kernel_main). How do we handle the case where the drop fails (panic).
+1. **ADR-0021 — EL drop policy.** Always-to-EL1 vs. keep-whichever. When does the drop happen (earliest possible; before kernel_main). How do we handle the case where the drop fails (panic).
 2. **Asm extension** in `bsp-qemu-virt/src/boot.s` for EL2→EL1 transition.
 3. **Rust helpers** for reading current EL (`CurrentEL` system register); probably a new method on `Cpu` or a free function.
 4. **Tests** — boot at EL1 under QEMU (default) and at EL2 (via `-machine virtualization=on`) and verify both land at EL1 in `kernel_entry`.
 
 ### Acceptance criteria
 
-- ADR-0020 Accepted.
+- ADR-0021 Accepted.
 - Kernel boots at EL1 in all QEMU configurations we care about.
 - Smoke test boots both QEMU variants and asserts the greeting still appears.
 
@@ -33,7 +33,7 @@ Turn on the MMU with an identity map for the kernel image region and its stack. 
 
 ### Sub-breakdown
 
-1. **ADR-0021 — Kernel virtual memory layout.** Identity at `0x4000_0000` vs. high-half split; memory type attributes (normal cached for RAM, device-nGnRnE for MMIO).
+1. **ADR-0022 — Kernel virtual memory layout.** Identity at `0x4000_0000` vs. high-half split; memory type attributes (normal cached for RAM, device-nGnRnE for MMIO). Mapping-mutation calls on the [`Mmu`](../../../hal/src/mmu.rs) trait should return a **typed "must-acknowledge" flush token** (analogous to `x86_64::structures::paging::MapperFlush`): each mutation produces a token that must be either explicitly `.flush()`-ed (executes the required TLB invalidation) or `.ignore()`-ed. Silent drop produces a compile-time warning. This keeps "did you remember to flush?" out of the reviewer's head and into the type system.
 2. **Physical frame allocator** — a minimal bitmap or free-list allocator in the kernel. Needed before page tables can be populated.
 3. **Initial page-table construction** — kernel mappings for `.text`, `.rodata`, `.data`, `.bss`, stack; MMIO mappings for the active UART and GIC.
 4. **MMU activation sequence** — the exact `TTBR`, `TCR`, `MAIR`, `SCTLR` writes and the required barriers.
@@ -42,7 +42,7 @@ Turn on the MMU with an identity map for the kernel image region and its stack. 
 
 ### Acceptance criteria
 
-- ADR-0021 Accepted.
+- ADR-0022 Accepted.
 - Kernel runs with the MMU on.
 - Physical frame allocator has host-tested correctness and a QEMU integration smoke.
 - Deliberate traps route through the exception-vector table.
@@ -59,7 +59,7 @@ Multiple per-task translation tables. Capability-gated map / unmap. Activation o
 
 ### Sub-breakdown
 
-1. **ADR-0022 — Address-space data structure.** How a BSP-specific `AddressSpace` is represented; who owns its page tables; how it integrates with the `Mmu` trait's associated type.
+1. **ADR-0023 — Address-space data structure.** How a BSP-specific `AddressSpace` is represented; who owns its page tables; how it integrates with the `Mmu` trait's associated type.
 2. **`AddressSpace` kernel object** — a new kernel-object type, like those from A3, with `AddressSpaceCap`.
 3. **Map / unmap operations** — wrappers around [`Mmu::map`](../../../hal/src/mmu.rs) / `Mmu::unmap` that validate the caller's capabilities.
 4. **TLB invalidation on unmap** — single-core only; multi-core is Phase C.
@@ -68,7 +68,7 @@ Multiple per-task translation tables. Capability-gated map / unmap. Activation o
 
 ### Acceptance criteria
 
-- ADR-0022 Accepted.
+- ADR-0023 Accepted.
 - Two address spaces coexist; the kernel activates each when its owning task runs.
 - Isolation verified on QEMU: AS-X cannot read AS-Y's data.
 
@@ -80,14 +80,14 @@ Load a userspace binary into an address space. For B4 the binary is statically e
 
 ### Sub-breakdown
 
-1. **ADR-0023 — Initial userspace image format.** Raw flat binary vs. minimal ELF subset. v1 favours raw flat (simplest).
+1. **ADR-0024 — Initial userspace image format.** Raw flat binary vs. minimal ELF subset. v1 favours raw flat (simplest).
 2. **Loader** — maps the embedded binary into a fresh address space under its `MemoryRegionCap`, sets up the initial stack, marks the entry point.
 3. **Task creation from a binary** — `task_create_from_image(image, as_cap, initial_caps) -> TaskCap`.
 4. **Tests** — host-side loader correctness (given an image blob, produce the expected mapping); QEMU-side task creation without yet running the task (that's B6).
 
 ### Acceptance criteria
 
-- ADR-0023 Accepted.
+- ADR-0024 Accepted.
 - A kernel test can load the embedded userspace image into an address space and report the entry point and initial stack pointer.
 
 ---
@@ -98,8 +98,8 @@ Traps from EL0 into EL1 via `SVC` (or the chosen mechanism). Syscall dispatch va
 
 ### Sub-breakdown
 
-1. **ADR-0024 — Syscall ABI.** Register calling convention (which regs carry syscall number vs. arguments vs. return); maximum arg count; error-return convention (register + flag vs. Result-like encoding); asynchronous vs. synchronous semantics.
-2. **ADR-0025 — Initial syscall set for B-phase.** At minimum: `send`, `recv`, `console_write` (debug-gated), `task_yield`, `task_exit`. No more in v1.
+1. **ADR-0025 — Syscall ABI.** Register calling convention (which regs carry syscall number vs. arguments vs. return); maximum arg count; error-return convention (register + flag vs. Result-like encoding); asynchronous vs. synchronous semantics.
+2. **ADR-0026 — Initial syscall set for B-phase.** At minimum: `send`, `recv`, `console_write` (debug-gated), `task_yield`, `task_exit`. No more in v1.
 3. **Exception-vector dispatch** — the EL0-synchronous vector routes to a Rust syscall dispatcher after saving user registers.
 4. **Syscall dispatcher** — maps a syscall number to a handler, validates capabilities, performs the operation, returns.
 5. **Copy-from / copy-to user** — validated access to userspace memory through the active address space. No raw dereferencing of user pointers.
@@ -107,7 +107,7 @@ Traps from EL0 into EL1 via `SVC` (or the chosen mechanism). Syscall dispatch va
 
 ### Acceptance criteria
 
-- ADR-0024 and ADR-0025 Accepted.
+- ADR-0025 and ADR-0026 Accepted.
 - Syscall entry works from EL0 back to EL1 and back; register state is preserved correctly.
 - Invalid syscalls (bad number, missing capability, out-of-bounds pointer) return errors without panicking.
 - Copy-from-user never dereferences raw user pointers outside the validated mapping.
@@ -142,16 +142,16 @@ When B6 is Done, run a business review. Phase C becomes active after that review
 
 | ADR | Purpose | Expected state |
 |-----|---------|----------------|
-| ADR-0020 | EL drop policy | B1 |
-| ADR-0021 | Kernel virtual memory layout | B2 |
-| ADR-0022 | Address-space data structure | B3 |
-| ADR-0023 | Initial userspace image format | B4 |
-| ADR-0024 | Syscall ABI | B5 |
-| ADR-0025 | Initial syscall set | B5 |
+| ADR-0021 | EL drop policy | B1 |
+| ADR-0022 | Kernel virtual memory layout | B2 |
+| ADR-0023 | Address-space data structure | B3 |
+| ADR-0024 | Initial userspace image format | B4 |
+| ADR-0025 | Syscall ABI | B5 |
+| ADR-0026 | Initial syscall set | B5 |
 
 ## Open questions carried into Phase B
 
-- Whether to use ELF for the initial userspace image or a raw binary (ADR-0023).
-- Whether syscalls should be synchronous-only or expose asynchronous variants from the start (ADR-0024).
-- Whether the initial userspace lives in its own binary target or is embedded as bytes via `include_bytes!` (ADR-0023).
+- Choose between ELF and a raw binary for the initial userspace image (ADR-0024).
+- Decide whether syscalls are synchronous-only or also expose asynchronous variants from the start (ADR-0025).
+- Determine whether the initial userspace lives in its own binary target or is embedded as bytes via `include_bytes!` (ADR-0024).
 - Exception-handler strategy and whether fault messages go through the capability system or a special-case path.

@@ -42,7 +42,7 @@ This ADR establishes the roadmap and analysis system: where the plan lives, wher
 docs/
 ├── roadmap/                   — the plan, in order of execution
 │   ├── README.md              — purpose, conventions, quick-navigation
-│   ├── phases/                — one file per phase (A–I)
+│   ├── phases/                — one file per phase (A–J)
 │   │   ├── README.md          — index + rationale for the split
 │   │   ├── phase-a.md         — detailed per-milestone breakdown
 │   │   ├── phase-b.md         — detailed
@@ -52,7 +52,8 @@ docs/
 │   │   ├── phase-f.md         — medium detail
 │   │   ├── phase-g.md         — medium detail
 │   │   ├── phase-h.md         — light detail
-│   │   └── phase-i.md         — light detail
+│   │   ├── phase-i.md         — light detail
+│   │   └── phase-j.md         — sketch (opt-in AI-native userspace)
 │   └── current.md             — "we are here" pointer
 │
 └── analysis/                  — the work, as it moves through the pipeline

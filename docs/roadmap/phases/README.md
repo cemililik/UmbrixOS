@@ -1,6 +1,6 @@
 # Phase plan
 
-Nine phases, rough execution order. Each phase is a separate file so detail can grow without any single document becoming unnavigable.
+Ten phases, rough execution order. Each phase is a separate file so detail can grow without any single document becoming unnavigable.
 
 The plan is a **sequence**, not a schedule: there are no dates. Later phases are sketched at lower resolution than earlier ones; detail appears as its turn approaches. The *why* behind the whole system lives in [ADR-0013](../../decisions/0013-roadmap-and-planning.md).
 

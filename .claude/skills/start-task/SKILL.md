@@ -25,6 +25,7 @@ when-to-use: When the next task in the active milestone becomes ready to pick up
    - List files across all phase folders: `docs/analysis/tasks/phase-*/T-*.md`.
    - The next number is the highest existing T-NNN + 1, zero-padded to three digits. Start at `T-001` if none exist.
    - IDs are sequential across the whole project, not restarted per phase.
+   - **Single-writer assumption.** Two concurrent task-creation flows can both observe the same "highest existing T-NNN" and allocate the same ID. v1 relies on a *single active writer* per branch: run this skill on a branch rebased onto `development`, and if at merge time another `T-NNN-*.md` with your chosen id has landed, re-run the numbering step (list again, pick a fresh highest+1, `git mv` the file, update every internal reference). A ledger-based reservation mechanism may arrive later; for now, the single-writer convention is the contract.
 
 3. **Create the task file** at `docs/analysis/tasks/phase-<letter>/T-NNN-<kebab-slug>.md`.
    - Copy from [`docs/analysis/tasks/TEMPLATE.md`](../../../docs/analysis/tasks/TEMPLATE.md).

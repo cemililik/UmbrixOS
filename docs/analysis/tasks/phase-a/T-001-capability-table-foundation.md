@@ -5,7 +5,7 @@
 - **Status:** In Review
 - **Created:** 2026-04-20
 - **Author:** @cemililik
-- **Dependencies:** none (Phase 4c — bootable kernel — is complete)
+- **Dependencies:** none (Milestone A1 — Bootable skeleton — is complete)
 - **Informs:** future tasks under Milestones A3 (kernel objects) and A4 (IPC primitives)
 - **ADRs required:** ADR-0014 (capability representation) — **Accepted** 2026-04-20.
 

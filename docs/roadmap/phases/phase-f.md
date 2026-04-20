@@ -14,13 +14,13 @@ GPIO control on BCM2711. Fundamental because most smart-home peripherals (sensor
 
 ### Sub-breakdown
 
-1. **ADR-0042 — GPIO service interface.** Pin granularity, capability per pin vs. per bank; direction / pull-up / drive-strength configuration.
+1. **ADR-0043 — GPIO service interface.** Pin granularity, capability per pin vs. per bank; direction / pull-up / drive-strength configuration.
 2. **`umbrix-driver-gpio-bcm2711`** driver task.
 3. **Client library** `umbrix-gpio` with typed pin handles.
 
 ### Acceptance criteria
 
-- ADR-0042 Accepted.
+- ADR-0043 Accepted.
 - Driver toggles a GPIO pin observable externally (an LED, a scope).
 
 ## Milestone F2 — I2C and SPI drivers
@@ -29,8 +29,8 @@ Most smart-home sensors use one of these. Covers the BCM2711 peripherals.
 
 ### Sub-breakdown
 
-1. **ADR-0043 — I2C service interface.**
-2. **ADR-0044 — SPI service interface.** (Separate ADR because of different capability semantics — SPI has chip-select per device, I2C has addresses.)
+1. **ADR-0044 — I2C service interface.**
+2. **ADR-0045 — SPI service interface.** (Separate ADR because of different capability semantics — SPI has chip-select per device, I2C has addresses.)
 3. **Drivers** `umbrix-driver-i2c-bcm2711`, `umbrix-driver-spi-bcm2711`.
 4. **Test clients** that read a known sensor (e.g., BME280 on I2C, an MCP SPI flash) to verify end-to-end.
 
@@ -46,13 +46,13 @@ The smart-home communication protocol. Matter is the modern open standard; MQTT 
 
 ### Sub-breakdown
 
-1. **ADR-0045 — Smart-home protocol.** Weighed by: open-source library availability, power profile, interop with the maintainer's existing hub, security posture.
+1. **ADR-0046 — Smart-home protocol.** Weighed by: open-source library availability, power profile, interop with the maintainer's existing hub, security posture.
 2. **Implementation** — either a port of an existing Rust crate (preferred) or a minimal subset implementation from scratch (accepted cost).
 3. **Security review** of the protocol implementation per [`analysis/reviews/security-reviews/`](../../analysis/reviews/security-reviews/).
 
 ### Acceptance criteria
 
-- ADR-0045 Accepted.
+- ADR-0046 Accepted.
 - End-to-end: Umbrix device sends a heartbeat / state update to a real hub.
 
 ## Milestone F4 — First smart-home device
@@ -81,10 +81,10 @@ Milestone F4 is a genuine milestone: Umbrix becomes real when this ships. Subseq
 
 | ADR | Purpose | Expected state |
 |-----|---------|----------------|
-| ADR-0042 | GPIO service interface | F1 |
-| ADR-0043 | I2C service interface | F2 |
-| ADR-0044 | SPI service interface | F2 |
-| ADR-0045 | Smart-home protocol | F3 |
+| ADR-0043 | GPIO service interface | F1 |
+| ADR-0044 | I2C service interface | F2 |
+| ADR-0045 | SPI service interface | F2 |
+| ADR-0046 | Smart-home protocol | F3 |
 
 ## Open questions carried into Phase F
 

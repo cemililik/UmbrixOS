@@ -19,7 +19,7 @@ For kernel-internal tasks where the "role" is another subsystem, say so directly
 
 ## Context
 
-<One or two paragraphs. What situation motivates this task? What would go wrong if it were skipped? What has happened before this in the project? Link related ADRs, prior tasks, architecture documents.>
+<One or two paragraphs. Describe the situation that motivates this task. Explain the consequences if it is skipped. Summarize prior work — linked ADRs, earlier tasks, architecture documents — that the reader needs to interpret this task.>
 
 ## Acceptance criteria
 

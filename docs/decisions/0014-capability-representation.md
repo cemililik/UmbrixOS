@@ -86,9 +86,17 @@ impl CapRights {
 }
 
 /// Placeholder for the object the capability points at. Milestone A3
-/// replaces this with a typed enum over real kernel objects.
+/// replaces this with a typed enum over real kernel objects. The inner
+/// identifier is kept private; callers construct through `CapObject::new`
+/// and read through `CapObject::raw`, so every touch site is auditable
+/// when the typed replacement lands.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct CapObject(pub u64);
+pub struct CapObject(u64);
+
+impl CapObject {
+    pub const fn new(id: u64) -> Self { Self(id) }
+    pub const fn raw(self) -> u64 { self.0 }
+}
 
 /// The kinds v1 supports — all currently stubs pointing at `CapObject`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -195,9 +203,9 @@ Explicit subtree walk, iterative using a small local stack buffer sized for `MAX
 ### Negative
 
 - **Compile-time table size.** Changing `CAP_TABLE_CAPACITY` requires a rebuild. Mitigation: the constant is exposed and revisited when a real use-case demands more; for v1 `64` is adequate.
-- **Generation overflow.** A `u32` generation counter wraps after ~4 × 10⁹ free-reuse cycles of the same slot. Mitigation: on overflow, the slot is permanently marked as used-and-inaccessible (the address stays in the table but no new handle can match). Documented; if this becomes a real scenario, a v2 ADR raises generation to `u64`.
+- **Generation overflow.** A `u32` generation counter wraps after ~4 × 10⁹ free-reuse cycles of the same slot. v1 does *not* implement a slot-poisoning mechanism — the current `Slot` layout (`entry: Option<SlotEntry>`, `generation: u32`, `next_free`) has no dedicated poison indicator, and `free_slot` wraps the generation without checking for overflow. Mitigation is therefore deferred: a v2 addition will either add a sentinel `generation == u32::MAX` convention (with `pop_free` and the allocation path skipping any slot whose next-bump would hit the sentinel), or introduce an explicit `poisoned: bool` field. Either way the contract is "once a slot can no longer produce a fresh generation, it is removed from future allocation." If in practice the overflow becomes reachable in any realistic workload, an earlier ADR raises the generation to `u64` instead.
 - **Hard depth cap (16).** Some future subsystem may want deeper. At that point, the cap is loosened in a follow-up ADR with a stated reason.
-- **Four sibling pointers per slot add ~4 bytes each.** Sixty-four slots × ~32 bytes per slot = ~2 KiB per task. Acceptable for v1.
+- **Three tree-link pointers per slot (`parent`, `first_child`, `next_sibling`) add 2 bytes each as `Option<u16>`.** Per-slot overhead sums to roughly 32 bytes including the rest of `SlotEntry`; sixty-four slots per task land near 2 KiB. Acceptable for v1.
 
 ### Neutral
 
@@ -237,7 +245,7 @@ Explicit subtree walk, iterative using a small local stack buffer sized for `MAX
 
 - **Per-task capability-table allocation.** Currently the table is a struct the kernel allocates wherever. When [Milestone A3](../roadmap/phases/phase-a.md) introduces a `Task` kernel object, the table becomes one of its fields. How task lifetimes compose with the table's lifetime is decided there, not here.
 - **Multi-core safety.** Single-core v1 does not need atomics on the table. [Phase C](../roadmap/phases/phase-c.md) will extend this (likely per-table mutex or per-core tables; ADR when we get there).
-- **Badge semantics.** Per-derivation discriminators for IPC endpoints are out of scope here; their bits, if any, will live inside `CapObject` or a sibling field per [ADR-0017](.) (expected in [A4](../roadmap/phases/phase-a.md)).
+- **Badge semantics.** Per-derivation discriminators for IPC endpoints are out of scope here; their bits, if any, will live inside `CapObject` or a sibling field per a future ADR (to be written in [A4](../roadmap/phases/phase-a.md) — see the A4 ledger in phase-a.md for the reserved number).
 - **Rights inheritance under parent-revoke.** Today a parent-revoke nukes descendants cascadingly. If a future subsystem wants "narrow parent rights without nuking children," that is a new operation with its own ADR.
 - **Serialization / persistence.** Capabilities do not persist across reboots in v1. Future work.
 - **Raising `CAP_TABLE_CAPACITY` and `MAX_DERIVATION_DEPTH`.** Both are revisited when a concrete use-case demands more. For now, both are `const` and documented.

@@ -62,12 +62,12 @@ Before starting, the reviewer determines the change's risk class:
 
 **Task:** did the docs change along with the code?
 
-- Every new public item has a rustdoc comment.
-- Every `unsafe fn` has a `# Safety` section.
-- Every new `Error` variant is listed in an `# Errors` section where applicable.
-- If the change affects architecture, [`docs/architecture/`](../../../architecture/) reflects it.
-- If the change affects user-facing workflows, a guide in [`docs/guides/`](../../../guides/) exists or is queued.
-- If the change implements or affects an ADR, it is referenced in the commit trailer.
+- Ensure a rustdoc comment exists for every new public item.
+- Add a `# Safety` section to each `unsafe fn`.
+- Document new `Error` variants in an `# Errors` section where applicable.
+- Update [`docs/architecture/`](../../../architecture/) when the change affects architecture.
+- Create or queue a guide in [`docs/guides/`](../../../guides/) for user-facing workflow changes.
+- Reference the relevant ADR in the commit trailer when the change implements or affects one.
 
 **Output:** `Documentation` section — gaps and their severity.
 

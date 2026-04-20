@@ -2,7 +2,7 @@
 
 The roadmap is **the plan** — what we intend to build and in what order. It answers two questions:
 
-1. **Where are we going?** — [`phases/`](phases/) (Phase A through Phase I).
+1. **Where are we going?** — [`phases/`](phases/) (Phase A through Phase J).
 2. **Where are we now?** — [`current.md`](current.md).
 
 The plan is separate from the work. Individual tasks and reviews live under [`../analysis/`](../analysis/) and are cross-linked from here. See [ADR-0013](../decisions/0013-roadmap-and-planning.md) for the rationale behind this split.

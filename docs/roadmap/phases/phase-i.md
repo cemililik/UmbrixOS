@@ -20,7 +20,7 @@ Pick a target SoC that is approachable (community-supported, documented) and com
 
 ### Sub-breakdown
 
-1. **ADR-0054 — Mobile target.** Specific device, specific SoC, exhaustive list of required peripherals, policy on required blobs.
+1. **ADR-0055 — Mobile target.** Specific device, specific SoC, exhaustive list of required peripherals, policy on required blobs.
 2. **Availability survey** — prices, lead times, reliability of the supply.
 3. **Prior-art survey** — who else has built non-Linux kernels on this SoC family; what they learned.
 
@@ -30,7 +30,7 @@ A display panel writes pixels; a touch panel reports events; these compose into 
 
 ### Sub-breakdown
 
-1. **ADR-0055 — Display stack architecture.** Framebuffer vs. compositor vs. direct-panel. Probably direct-panel + a tiny software compositor for Phase I.
+1. **ADR-0056 — Display stack architecture.** Framebuffer vs. compositor vs. direct-panel. Probably direct-panel + a tiny software compositor for Phase I.
 2. **Display driver** for the chosen panel.
 3. **Touch driver** (often I2C-attached; reuses F2 work).
 4. **Input service** mapping raw touch events to typed events.
@@ -41,7 +41,7 @@ Mobile requires battery-aware CPU scaling, suspend / resume, screen blanking, ag
 
 ### Sub-breakdown
 
-1. **ADR-0056 — Power management scope.** What levels (idle, suspend-to-RAM, hibernate) and what invariants.
+1. **ADR-0057 — Power management scope.** What levels (idle, suspend-to-RAM, hibernate) and what invariants.
 2. **Scheduler integration** — CPU-frequency hints, big.LITTLE awareness if the SoC has it.
 3. **Battery service** — SoC-specific PMIC driver + SOC / voltage monitoring.
 4. **Wake sources** — timer, touch, modem (if applicable).
@@ -65,9 +65,9 @@ The mobile milestone is explicitly a stretch goal. Reaching I4 makes Umbrix a cr
 
 | ADR | Purpose | Expected state |
 |-----|---------|----------------|
-| ADR-0054 | Mobile target | I1 |
-| ADR-0055 | Display stack architecture | I2 |
-| ADR-0056 | Power management scope | I3 |
+| ADR-0055 | Mobile target | I1 |
+| ADR-0056 | Display stack architecture | I2 |
+| ADR-0057 | Power management scope | I3 |
 
 ## Open questions carried into Phase I
 

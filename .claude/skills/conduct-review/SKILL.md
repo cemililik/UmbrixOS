@@ -46,8 +46,8 @@ when-to-use: When a trigger for any of the four review types fires — milestone
    - **performance-optimization** — if the verdict is Merge, the merge commit references this artifact.
 
 9. **Commit** per [`commit-style.md`](../../../docs/standards/commit-style.md):
-   - Scope: `docs`.
-   - Message: `docs(roadmap): <type>-review <scope>` — e.g. `docs(roadmap): business-review A2-completion`.
+   - Scope: `roadmap` for business reviews (they touch `current.md` and the roadmap's forward motion); `analysis` for code / security / performance-optimization reviews (their artifact lives in `docs/analysis/reviews/<type>/`).
+   - Message: `docs(<scope>): <type>-review <slug>` — e.g. `docs(roadmap): business-review A2-completion`, `docs(analysis): code-review PR-42`, `docs(analysis): security-review cap-table-revoke`, `docs(analysis): performance-review ipc-hot-path`.
    - Body: one-paragraph summary of the verdict / adjustments.
    - Trailer: `Refs: ADR-0013` and any ADRs the review cites.
 

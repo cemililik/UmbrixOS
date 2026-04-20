@@ -50,7 +50,7 @@ Per-task capability table data structure, capability kind enum, and the in-kerne
 
 ### Tasks under A2
 
-- [T-001 — Capability table foundation](../../analysis/tasks/phase-a/T-001-capability-table-foundation.md) — Ready.
+- [T-001 — Capability table foundation](../../analysis/tasks/phase-a/T-001-capability-table-foundation.md) — In Review.
 - Subsequent tasks (T-002+) will be opened as T-001 lands if further decomposition is needed; current plan is T-001 covers the milestone in one task.
 
 ### Informs
@@ -65,7 +65,7 @@ Introduce the first concrete kernel objects — `Task`, `Endpoint`, `Notificatio
 
 ### Sub-breakdown
 
-1. **ADR-0015 — Kernel object storage.** Intrusive / arena / slab. Per-type vs. shared arena. Lifecycle guarantees (who owns what; when does a capability go dangling).
+1. **ADR-0016 — Kernel object storage.** Intrusive / arena / slab. Per-type vs. shared arena. Lifecycle guarantees (who owns what; when does a capability go dangling). Consider a **fixed-size-block allocator** per kernel-object kind (one arena for `Task`, one for `Endpoint`, one for `Notification`) — O(1) allocate/free, bounded memory, no fragmentation within a kind, same shape as the `CapabilityTable` from A2. A single shared arena is an alternative worth explicitly weighing.
 2. **`KernelObject` trait or enum.** A uniform way for the capability table to point at any object.
 3. **`Task` kernel object.** Minimal fields — an id, a placeholder for state, a capability table reference. No scheduler interaction yet.
 4. **`Endpoint` kernel object.** Fields for the IPC queues that A4 will use; structurally present but not wired up.
@@ -76,7 +76,7 @@ Introduce the first concrete kernel objects — `Task`, `Endpoint`, `Notificatio
 
 ### Acceptance criteria
 
-- ADR-0015 Accepted.
+- ADR-0016 Accepted.
 - Kernel-object types defined, reachable from the capability table.
 - `cap_drop` of the last capability pointing at an object is observed (for reference: whether the object is freed immediately or on `destroy` is an ADR-decided detail).
 - No heap; kernel objects live in a bounded pool per type.
@@ -94,11 +94,11 @@ Synchronous rendezvous endpoints and asynchronous notifications. Capability tran
 
 ### Sub-breakdown
 
-1. **ADR-0016 — IPC primitive set.** Pure rendezvous vs. rendezvous + reply-recv fastpath. Blocking semantics. Message format (fixed-size vs. variable, registers vs. buffer).
-2. **ADR-0017 — Badge scheme (if v1 needs it).** Per-derivation discriminator carried through to the receiver. Can be deferred if scope permits.
+1. **ADR-0017 — IPC primitive set.** Pure rendezvous vs. rendezvous + reply-recv fastpath. Blocking semantics. Message format (fixed-size vs. variable, registers vs. buffer).
+2. **ADR-0018 — Badge scheme (if v1 needs it).** Per-derivation discriminator carried through to the receiver. Can be deferred if scope permits.
 3. **`send` operation.** Validates the sender's `SendCap`; if a receiver waits, delivers; otherwise blocks the sender on the endpoint queue.
 4. **`recv` operation.** Symmetric to `send`.
-5. **`reply_recv` fastpath** (if ADR-0016 keeps it in v1).
+5. **`reply_recv` fastpath** (if ADR-0017 keeps it in v1).
 6. **`notify` operation.** Fires a bit on a notification's saturating word; wakes any waiter.
 7. **Capability transfer with message.** Moves caps atomically with delivery; validates sender holds each claimed cap.
 8. **Rendezvous correctness** across sender-first and receiver-first orderings.
@@ -106,7 +106,7 @@ Synchronous rendezvous endpoints and asynchronous notifications. Capability tran
 
 ### Acceptance criteria
 
-- ADR-0016 Accepted; ADR-0017 Accepted or explicitly deferred.
+- ADR-0017 Accepted; ADR-0018 Accepted or explicitly deferred.
 - `send` / `recv` / `notify` operations implemented against the A3 kernel objects.
 - Capability transfer is atomic with delivery (partial-transfer failure modes ruled out by construction or by test).
 - Cross-task tests (two stub "tasks" in kernel code) demonstrate the round trip.
@@ -124,8 +124,8 @@ The first real scheduler: cooperative yield-based, with a context-switch primiti
 
 ### Sub-breakdown
 
-1. **ADR-0018 — Scheduler shape.** Queue structure (FIFO per priority / single queue / ring). Yield semantics ("yield to anyone" vs. "yield to a specific task"). Blocked-task handling.
-2. **ADR-0019 — `Cpu` trait v2 (context-switch extension).** Adds `save_context` / `restore_context` primitives to [`umbrix-hal::Cpu`](../../../hal/src/cpu.rs). Probably adds a `TaskContext` associated type.
+1. **ADR-0019 — Scheduler shape.** Queue structure (FIFO per priority / single queue / ring). Yield semantics ("yield to anyone" vs. "yield to a specific task"). Blocked-task handling.
+2. **ADR-0020 — `Cpu` trait v2 (context-switch extension).** Adds `save_context` / `restore_context` primitives to [`umbrix-hal::Cpu`](../../../hal/src/cpu.rs). Probably adds a `TaskContext` associated type.
 3. **Context-switch assembly** in `bsp-qemu-virt`: saves callee-saved regs + SP + PC, restores the target task's state.
 4. **Safe Rust wrapper** for the assembly, living in the BSP with tight `unsafe` audit.
 5. **Scheduler queue** — bounded, per-priority; for v1 a single FIFO is enough.
@@ -135,7 +135,7 @@ The first real scheduler: cooperative yield-based, with a context-switch primiti
 
 ### Acceptance criteria
 
-- ADR-0018 and ADR-0019 Accepted.
+- ADR-0019 and ADR-0020 Accepted.
 - Cpu trait v2 lands in `umbrix-hal`; BSP provides the asm.
 - Two kernel-level tasks yield back and forth; this is observable via console output from inside QEMU.
 - `unsafe` around the context switch is audited; the safe wrapper's invariants are stated in its `# Safety` doc.
@@ -177,16 +177,16 @@ When A6 is Done, run a full business review covering the whole phase. The review
 | ADR | Purpose | Expected state |
 |-----|---------|----------------|
 | ADR-0014 | Capability representation | Proposed → Accepted in A2 |
-| ADR-0015 | Kernel object storage | Proposed → Accepted in A3 |
-| ADR-0016 | IPC primitive set | Proposed → Accepted in A4 |
-| ADR-0017 | Badge scheme (if v1 needs it) | Proposed → Accepted in A4 or explicitly deferred |
-| ADR-0018 | Scheduler shape | Proposed → Accepted in A5 |
-| ADR-0019 | `Cpu` trait v2 (context-switch) | Proposed → Accepted in A5 |
+| ADR-0016 | Kernel object storage | Proposed → Accepted in A3 |
+| ADR-0017 | IPC primitive set | Proposed → Accepted in A4 |
+| ADR-0018 | Badge scheme (if v1 needs it) | Proposed → Accepted in A4 or explicitly deferred |
+| ADR-0019 | Scheduler shape | Proposed → Accepted in A5 |
+| ADR-0020 | `Cpu` trait v2 (context-switch) | Proposed → Accepted in A5 |
 
 Numbers may shift if unexpected decisions land in between; sequencing here is intent, not reservation.
 
 ## Open questions carried into Phase A
 
-- Whether A4's IPC primitive set needs badges in v1 (ADR-0017) or can defer them.
-- Whether A5's scheduler needs priority classes in v1 (ADR-0018 decides; preference is single class for now).
-- Whether `Cpu` v2 stays one trait with new methods or spawns a sibling `ContextSwitch` trait (ADR-0019 decides).
+- Whether A4's IPC primitive set needs badges in v1 (ADR-0018) or can defer them.
+- Whether A5's scheduler needs priority classes in v1 (ADR-0019 decides; preference is single class for now).
+- Whether `Cpu` v2 stays one trait with new methods or spawns a sibling `ContextSwitch` trait (ADR-0020 decides).

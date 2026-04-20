@@ -14,7 +14,7 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 
 ## Notes
 
-- T-001 implementation landed on `development`; 61 host tests green (34 existing test-hal + 27 new in kernel::cap).
-- [ADR-0014](../decisions/0014-capability-representation.md) Accepted; kernel now has `cap::CapabilityTable`, `cap::CapHandle`, `cap::CapRights`, `cap::Capability`, `cap::CapError` — zero `unsafe`, no heap, bounded at `CAP_TABLE_CAPACITY = 64` per task.
-- The kernel boot flow is unchanged; the new module is not yet wired into `run`.
+- T-001 implementation landed on `development`; see the task file for evidence and test coverage: [T-001](../analysis/tasks/phase-a/T-001-capability-table-foundation.md).
+- [ADR-0014](../decisions/0014-capability-representation.md) Accepted; the kernel now exposes `cap::CapabilityTable`, `cap::CapHandle`, `cap::CapRights`, `cap::Capability`, and `cap::CapError`.
+- The new module is not yet wired into `run`.
 - The maintainer updates this file when the active task changes. AI agents update it when they move a task to `In Progress` or `Done` via the [`start-task`](../../.claude/skills/start-task/SKILL.md) and [`conduct-review`](../../.claude/skills/conduct-review/SKILL.md) skills.
