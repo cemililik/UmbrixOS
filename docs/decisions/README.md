@@ -34,6 +34,7 @@ Each ADR contains:
 | 0003 | [Apache-2.0 license](0003-license-apache-2.md) | Accepted | 2026-04-20 |
 | 0004 | [Target hardware platforms and tiers](0004-target-platforms.md) | Accepted | 2026-04-20 |
 | 0005 | [English as the documentation and code language](0005-documentation-language-english.md) | Accepted | 2026-04-20 |
+| 0006 | [Workspace layout and initial crate boundaries](0006-workspace-layout.md) | Accepted | 2026-04-20 |
 
 ## Creating a new ADR
 
