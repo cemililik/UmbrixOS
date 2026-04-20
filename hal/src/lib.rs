@@ -14,18 +14,24 @@
 //!
 //! ## Status
 //!
-//! Scaffolding only. The traits below are placeholders whose method surfaces
-//! will be pinned down — each in its own ADR — during Phase 4b implementation.
+//! In progress. Traits are pinned down one at a time, each behind a dedicated
+//! ADR. Accepted so far: [`Console`] (ADR-0007). The remaining trait stubs
+//! below are placeholders whose method surfaces will be pinned by their own
+//! ADRs at Phase 4b implementation time.
 
 #![no_std]
+
+mod console;
+
+pub use console::{Console, FmtWriter};
 
 /// Privileged CPU state and control.
 ///
 /// Implementations are architecture-specific (aarch64 for the initial BSPs;
 /// RISC-V planned). Responsibilities: core identification, CPU-level interrupt
-/// masking, wait-for-interrupt, context-switch primitives, memory barriers that
-/// Rust's atomics do not cover, and secondary-core start via PSCI or an
-/// architecturally equivalent mechanism.
+/// masking, wait-for-interrupt, context-switch primitives, memory barriers
+/// that Rust's atomics do not cover, and secondary-core start via `PSCI` or
+/// an architecturally equivalent mechanism.
 ///
 /// Final method signatures to be settled in a dedicated ADR at Phase 4b
 /// implementation time.
@@ -34,9 +40,9 @@ pub trait Cpu {}
 /// Memory management unit interaction.
 ///
 /// Responsibilities: translation-table activation, entry installation and
-/// removal, TLB invalidation (per-ASID, global, per-address), and the cache
-/// maintenance sequences the architecture requires between page-table writes
-/// and MMU reads.
+/// removal, `TLB` invalidation (per-`ASID`, global, per-address), and the
+/// cache maintenance sequences the architecture requires between page-table
+/// writes and `MMU` reads.
 ///
 /// Memory allocation for page tables is not the HAL's job — the kernel owns
 /// a physical-frame allocator and hands the HAL frames to fill in.
@@ -44,34 +50,26 @@ pub trait Mmu {}
 
 /// Interrupt controller dispatch and control.
 ///
-/// Responsibilities: enable and disable specific IRQ lines, acknowledge the
-/// current IRQ at entry, end-of-interrupt signalling, and optional per-CPU
-/// routing.
+/// Responsibilities: enable and disable specific `IRQ` lines, acknowledge
+/// the current `IRQ` at entry, end-of-interrupt signalling, and optional
+/// per-CPU routing.
 ///
 /// Used by the kernel's minimal interrupt service routine. Drivers never see
-/// this interface; they receive asynchronous notifications on their `IrqCap`'s
-/// endpoint.
+/// this interface; they receive asynchronous notifications on their
+/// `IrqCap`'s endpoint.
 pub trait IrqController {}
 
 /// Monotonic time and deadline arming.
 ///
 /// Responsibilities: report nanoseconds since boot (monotonic, never goes
-/// backwards across suspend), arm a one-shot deadline that arrives as an IRQ,
-/// and cancel a deadline.
+/// backwards across suspend), arm a one-shot deadline that arrives as an
+/// `IRQ`, and cancel a deadline.
 pub trait Timer {}
 
-/// Byte-sink console for early boot and panic diagnostics.
+/// System `IOMMU` interaction, on platforms that have one.
 ///
-/// Writes are synchronous. No formatting, no levels, no buffering — those
-/// responsibilities belong to the userspace log service. This trait exists so
-/// that diagnostic output is possible before userspace is up and during
-/// panic-time when nothing else can be trusted.
-pub trait Console {}
-
-/// System IOMMU interaction, on platforms that have one.
-///
-/// Scopes a peripheral's DMA to the regions granted to its driver. On
-/// platforms without an IOMMU (for example, Raspberry Pi 4), this trait is
+/// Scopes a peripheral's `DMA` to the regions granted to its driver. On
+/// platforms without an `IOMMU` (for example, Raspberry Pi 4), this trait is
 /// absent from the BSP or implemented as a no-op per the BSP's explicit
 /// design. See
 /// [`docs/architecture/security-model.md`][sec-doc] for the trust-boundary
