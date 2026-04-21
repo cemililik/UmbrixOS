@@ -188,6 +188,16 @@ static EP_CAP_A: StaticCell<CapHandle> = StaticCell::new();
 /// Task B's endpoint capability handle (index into `TABLE_B`).
 static EP_CAP_B: StaticCell<CapHandle> = StaticCell::new();
 
+/// Task kernel-object arena — global per [ADR-0016]. Although the v1 demo
+/// never reads this arena after `create_task` has returned the two
+/// `TaskHandle`s, global storage is the uniform pattern established by
+/// ADR-0016 for every kernel-object kind. Keeping `TaskArena` here (and
+/// not on `kernel_entry`'s stack) avoids a second BSP static-cell churn
+/// when task destruction / status-query APIs arrive in later Phase B work.
+///
+/// [ADR-0016]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0016-kernel-object-storage.md
+static TASK_ARENA: StaticCell<TaskArena> = StaticCell::new();
+
 // ─── Task B ───────────────────────────────────────────────────────────────────
 
 /// IPC demo — receiver side. Registers as receiver on the endpoint, waits for
@@ -402,9 +412,22 @@ pub extern "C" fn kernel_entry() -> ! {
 
     // ── Kernel-object setup ───────────────────────────────────────────────────
 
-    let mut arena = TaskArena::default();
-    let handle_a = create_task(&mut arena, Task::new(0)).expect("create_task A failed");
-    let handle_b = create_task(&mut arena, Task::new(1)).expect("create_task B failed");
+    // Publish the Task arena before any `create_task` call — subsequent
+    // access is via raw pointer per the ADR-0021 discipline, even though
+    // the arena sees no post-setup use in the v1 demo.
+    // SAFETY: single-core; no task is running yet. Audit: UNSAFE-2026-0001.
+    unsafe {
+        (*TASK_ARENA.0.get()).write(TaskArena::default());
+    }
+    // SAFETY: `TASK_ARENA` was just written above; momentary `&mut` is
+    // scoped to these two `create_task` calls and drops before any task
+    // runs. Audit: UNSAFE-2026-0014.
+    let (handle_a, handle_b) = unsafe {
+        let arena = &mut *TASK_ARENA.as_mut_ptr();
+        let ha = create_task(arena, Task::new(0)).expect("create_task A failed");
+        let hb = create_task(arena, Task::new(1)).expect("create_task B failed");
+        (ha, hb)
+    };
 
     // ── IPC infrastructure ────────────────────────────────────────────────────
 
