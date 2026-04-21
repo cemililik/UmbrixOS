@@ -24,10 +24,13 @@
 //!   later subsystem refers through for authority.
 //! - [`ipc`] — IPC subsystem (Phase A4 / [T-003]): `send` / `recv` / `notify`
 //!   primitives over the A3 kernel objects, gated by capabilities.
+//! - [`sched`] — cooperative scheduler (Phase A5 / [T-004]): bounded FIFO
+//!   ready queue, per-task state, and IPC bridge.
 //!
 //! [T-001]: https://github.com/cemililik/UmbrixOS/blob/main/docs/analysis/tasks/phase-a/T-001-capability-table-foundation.md
 //! [T-002]: https://github.com/cemililik/UmbrixOS/blob/main/docs/analysis/tasks/phase-a/T-002-kernel-object-storage.md
 //! [T-003]: https://github.com/cemililik/UmbrixOS/blob/main/docs/analysis/tasks/phase-a/T-003-ipc-primitives.md
+//! [T-004]: https://github.com/cemililik/UmbrixOS/blob/main/docs/analysis/tasks/phase-a/T-004-cooperative-scheduler.md
 
 #![cfg_attr(not(test), no_std)]
 // Kernel-specific stricter lints on top of the workspace set.
@@ -42,24 +45,4 @@
 pub mod cap;
 pub mod ipc;
 pub mod obj;
-
-use umbrix_hal::Console;
-
-/// Portable kernel entry, called by the BSP after early init.
-///
-/// In Phase 4c v0.0.1 this writes a greeting to the console and idles
-/// the CPU in a `spin_loop`. Subsequent phases will bring up the
-/// scheduler, IPC, capability system, and userspace init here before
-/// reaching steady state.
-///
-/// # Never returns
-///
-/// This function is `-> !`. A return would be a kernel bug; the BSP's
-/// reset stub halts defensively if it ever does.
-pub fn run<C: Console>(console: &C) -> ! {
-    console.write_bytes(b"umbrix: hello from kernel_main\n");
-
-    loop {
-        core::hint::spin_loop();
-    }
-}
+pub mod sched;

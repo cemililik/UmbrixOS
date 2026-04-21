@@ -118,7 +118,7 @@ Synchronous rendezvous endpoints and asynchronous notifications. Capability tran
 
 ### Tasks under A4
 
-- [T-003 — IPC primitives](../../analysis/tasks/phase-a/T-003-ipc-primitives.md) — In Review.
+- [T-003 — IPC primitives](../../analysis/tasks/phase-a/T-003-ipc-primitives.md) — Done.
 
 ### Informs
 
@@ -126,7 +126,7 @@ Milestone A5 needs IPC so that yield-to-peer makes sense; A6 demonstrates A4's o
 
 ---
 
-## Milestone A5 — Cooperative scheduler and context switch
+## Milestone A5 — Cooperative scheduler and context switch ✓ (done 2026-04-21)
 
 The first real scheduler: cooperative yield-based, with a context-switch primitive that swaps register state between kernel-level "tasks." No preemption, no timer tick yet.
 
@@ -147,6 +147,10 @@ The first real scheduler: cooperative yield-based, with a context-switch primiti
 - Cpu trait v2 lands in `umbrix-hal`; BSP provides the asm.
 - Two kernel-level tasks yield back and forth; this is observable via console output from inside QEMU.
 - `unsafe` around the context switch is audited; the safe wrapper's invariants are stated in its `# Safety` doc.
+
+### Tasks under A5
+
+- [T-004 — Cooperative scheduler](../../analysis/tasks/phase-a/T-004-cooperative-scheduler.md) — Done.
 
 ### Informs
 

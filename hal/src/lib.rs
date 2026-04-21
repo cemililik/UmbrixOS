@@ -16,19 +16,22 @@
 //!
 //! In progress. Traits are pinned down one at a time, each behind a dedicated
 //! ADR. Accepted so far: [`Console`] (ADR-0007), [`Cpu`] (ADR-0008),
-//! [`Mmu`] (ADR-0009), [`Timer`] (ADR-0010), [`IrqController`] (ADR-0011).
+//! [`Mmu`] (ADR-0009), [`Timer`] (ADR-0010), [`IrqController`] (ADR-0011),
+//! [`ContextSwitch`] (ADR-0020).
 //! The remaining trait stub below is a placeholder whose method surface
 //! will be pinned by its own ADR when a concrete caller needs it.
 
 #![no_std]
 
 mod console;
+mod context_switch;
 mod cpu;
 mod irq_controller;
 mod mmu;
 mod timer;
 
 pub use console::{Console, FmtWriter};
+pub use context_switch::ContextSwitch;
 pub use cpu::{CoreId, Cpu, IrqGuard, IrqState};
 pub use irq_controller::{IrqController, IrqNumber};
 pub use mmu::{
