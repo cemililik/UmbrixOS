@@ -6,7 +6,7 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 
 - **Active phase:** A — Kernel core on QEMU `virt`.
 - **Active milestone:** A5 — Cooperative scheduler and context switch.
-- **Active task:** [T-004 — Cooperative scheduler](../analysis/tasks/phase-a/T-004-cooperative-scheduler.md) (status: **Ready**).
+- **Active task:** [T-004 — Cooperative scheduler](../analysis/tasks/phase-a/T-004-cooperative-scheduler.md) (status: **In Progress**).
 - **Working branch:** `development`.
 - **Last completed milestone:** A4 — IPC primitives, on 2026-04-21 (PR merged to `main`).
 - **Last completed task:** [T-003 — IPC primitives](../analysis/tasks/phase-a/T-003-ipc-primitives.md) — `Done` 2026-04-21.

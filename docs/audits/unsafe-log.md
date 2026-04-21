@@ -61,3 +61,59 @@ Entries are **append-only**. When an `unsafe` region is removed, its entry gains
 - **Rejected alternatives:** Using a `volatile_register` crate would wrap these in typed abstractions at some ergonomic cost; the plain-MMIO form is small enough and easy enough to audit here. Revisit if more registers join the picture.
 - **Reviewed by:** @cemililik.
 - **Status:** Active.
+
+### UNSAFE-2026-0006 — `Send` + `Sync` for `QemuVirtCpu`
+
+- **Introduced:** 2026-04-21, T-004 / A5 context-switch implementation.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `unsafe impl Send for QemuVirtCpu` and `unsafe impl Sync for QemuVirtCpu`.
+- **Operation:** Declares that `QemuVirtCpu` can be transferred between threads and that shared references to it are safe to use concurrently.
+- **Invariants relied on:**
+  - `QemuVirtCpu` is a zero-size type with no fields, no heap allocation, and no interior mutability.
+  - The hardware resources it accesses (DAIF interrupt-mask register, MPIDR) are per-core system registers — inherently core-local in a single-core v1 system.
+  - In a multi-core system, each core would construct its own `QemuVirtCpu`; a future ADR will revisit this.
+- **Rejected alternatives:** The compiler cannot derive `Send`/`Sync` for structs containing raw pointers; since `QemuVirtCpu` uses inline assembly to access system registers rather than storing raw pointers, this is a marker assertion rather than a pointer-safety claim.
+- **Reviewed by:** @cemililik (self-review, solo phase).
+- **Status:** Active.
+
+### UNSAFE-2026-0007 — inline assembly in `QemuVirtCpu::Cpu` methods
+
+- **Introduced:** 2026-04-21, T-004 / A5 context-switch implementation.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `current_core_id`, `disable_irqs`, `restore_irq_state`, `wait_for_interrupt`, `instruction_barrier`.
+- **Operation:** `MRS`/`MSR` DAIF and MPIDR_EL1 register accesses, `WFI`, and `ISB` via `core::arch::asm!`.
+- **Invariants relied on:**
+  - All instructions are EL1-privileged; the kernel runs at EL1 on QEMU `virt`.
+  - `MRS` reads are non-destructive; `MSR DAIFSET` masks interrupts atomically.
+  - `MSR DAIF, x` in `restore_irq_state` writes exactly the value returned by a prior `disable_irqs` call — the caller is contractually bound to pass the value unmodified.
+  - `WFI` and `ISB` do not modify registers or memory; `options(nostack, nomem)` is correct.
+- **Rejected alternatives:** No safe Rust abstraction exists for EL1 system-register access; the HAL trait is the safe abstraction wrapping these blocks.
+- **Reviewed by:** @cemililik.
+- **Status:** Active.
+
+### UNSAFE-2026-0008 — context-switch assembly in `context_switch_asm` and callers
+
+- **Introduced:** 2026-04-21, T-004 / A5 context-switch implementation.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `context_switch_asm` and `QemuVirtCpu::context_switch`; [`kernel/src/sched/mod.rs`](../../kernel/src/sched/mod.rs) — `Scheduler::start`, `yield_now`, `ipc_recv_and_yield`.
+- **Operation:** Saves `x19`–`x28`, `x29` (fp), `x30` (lr), `sp` to `*current` and restores from `*next` via `STP`/`LDP`/`STR`/`LDR` instructions; returns via `RET` which jumps to the loaded `lr`.
+- **Invariants relied on:**
+  - `current` and `next` are distinct (different task indices) wherever the split-borrow pattern is used in `Scheduler`.
+  - Both pointers are 8-byte aligned — `Aarch64TaskContext` is `#[repr(C)]` with all `u64` fields.
+  - Interrupts are disabled by `IrqGuard` before `context_switch` is called. An IRQ mid-switch would observe partially saved registers.
+  - `next` was either written by a prior `context_switch_asm` call or fully initialised by `init_context` (UNSAFE-2026-0009).
+  - The `ret` instruction will jump to `next.lr`; for a task's first run, `lr` is the entry function address set by `init_context`. The entry function is `fn() -> !` and truly never returns.
+- **Rejected alternatives:** Context switching requires register-level manipulation that cannot be expressed in safe Rust. The assembly is minimal (13 saves + 13 restores + ret).
+- **Reviewed by:** @cemililik.
+- **Status:** Active.
+
+### UNSAFE-2026-0009 — context initialisation in `QemuVirtCpu::init_context` and callers
+
+- **Introduced:** 2026-04-21, T-004 / A5 context-switch implementation.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `QemuVirtCpu::init_context`; [`kernel/src/sched/mod.rs`](../../kernel/src/sched/mod.rs) — `Scheduler::add_task`.
+- **Operation:** Writes `entry` (cast to `u64`) into `ctx.lr` and `stack_top` (cast to `u64`) into `ctx.sp`. The first restore of this context will begin executing `entry` with `stack_top` as the stack pointer.
+- **Invariants relied on:**
+  - `stack_top` must be 16-byte aligned and point one byte past the top of at least 512 bytes of stack memory that remains valid for the task's lifetime. Callers are contractually bound by the `# Safety` doc.
+  - Function pointers are always valid addresses in Rust — casting `fn() -> !` to `usize` then `u64` is safe.
+  - The entry function truly never returns; if it did, the `ret` in `context_switch_asm` would jump to garbage.
+  - `ctx` is at a valid, exclusively-owned index within `Scheduler::contexts`.
+- **Rejected alternatives:** Initialising a context requires writing raw register values; no safe abstraction exists.
+- **Reviewed by:** @cemililik.
+- **Status:** Active.

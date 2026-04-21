@@ -2,7 +2,7 @@
 
 - **Phase:** A
 - **Milestone:** A5 — Cooperative scheduler and context switch
-- **Status:** Ready
+- **Status:** In Progress
 - **Created:** 2026-04-21
 - **Author:** @cemililik
 - **Dependencies:** T-003 — IPC primitives (Done)

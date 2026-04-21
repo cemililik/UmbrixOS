@@ -28,8 +28,10 @@ use core::panic::PanicInfo;
 use umbrix_hal::{Console, FmtWriter};
 
 mod console;
+mod cpu;
 
 use console::Pl011Uart;
+use cpu::QemuVirtCpu;
 
 /// MMIO base of the QEMU `virt` machine's PL011 UART.
 ///
@@ -56,8 +58,12 @@ pub extern "C" fn kernel_entry() -> ! {
     // window are guaranteed by the machine.
     // Audit: UNSAFE-2026-0001.
     let console = unsafe { Pl011Uart::new(PL011_UART_BASE) };
+    // SAFETY: `QemuVirtCpu::new` requires at most one instance per physical
+    // core. We are single-core and this is the only call site.
+    // Audit: UNSAFE-2026-0006.
+    let cpu = QemuVirtCpu::new();
 
-    umbrix_kernel::run(&console)
+    umbrix_kernel::run(&console, &cpu)
 }
 
 #[panic_handler]
