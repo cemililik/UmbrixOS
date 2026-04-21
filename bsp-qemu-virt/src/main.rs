@@ -178,11 +178,19 @@ fn task_b() -> ! {
     // suspension, it creates its own `&mut` references to SCHED, EP_ARENA, and
     // IPC_QUEUES from the same UnsafeCells — technically aliasing mutable
     // references. This is safe under the single-core cooperative invariant
-    // (no two tasks execute simultaneously) and the same reasoning documented
-    // in UNSAFE-2026-0012: the suspended task's stack frame does not access any
-    // of these references after the context switch returns, and the compiler
-    // cannot observe the aliasing across the assembly context-switch barrier.
-    // SAFETY: see aliasing note above. Audit: UNSAFE-2026-0012.
+    // (no two tasks execute simultaneously): the suspended task's stack frame
+    // does not access any of these references after the context switch
+    // returns, and the compiler cannot observe the aliasing across the
+    // assembly context-switch barrier.
+    // Rejected alternatives: a raw-pointer scheduler API would remove the
+    // aliasing entirely, but the v1 scheduler bridge signatures take `&mut`
+    // across the suspension point — switching to raw pointers requires
+    // reshaping `Scheduler::ipc_recv_and_yield` and is scheduled as a
+    // Phase B refactor (see UNSAFE-2026-0012 status). A Mutex<Scheduler> or
+    // similar runtime lock would defer rather than eliminate the unsafety
+    // and pay lock overhead for a kernel that has no blocking primitive yet.
+    // SAFETY: see aliasing and rejected-alternatives notes above.
+    // Audit: UNSAFE-2026-0012.
     let recv_outcome = unsafe {
         (*SCHED.0.get())
             .assume_init_mut()
@@ -216,7 +224,9 @@ fn task_b() -> ! {
         label: 0xBBBB,
         params: [0; 3],
     };
-    // SAFETY: same aliasing invariants as the ipc_recv_and_yield call above.
+    // SAFETY: same aliasing invariants and rejected alternatives as the
+    // ipc_recv_and_yield call above; raw-pointer refactor deferred to
+    // Phase B, Mutex rejected for same reasons.
     // Audit: UNSAFE-2026-0012.
     unsafe {
         (*SCHED.0.get())
@@ -235,11 +245,13 @@ fn task_b() -> ! {
         // Yield explicitly so Task A can receive the reply that was just queued
         // as SendPending. Without this yield, A's ipc_recv_and_yield would never
         // run (cooperative scheduling; B never blocks again after the send).
-        // yield_now returns Err only when current == None, which cannot happen
-        // once the scheduler has started.
-        let _ = (*SCHED.0.get())
+        // `yield_now` only errors with `NoCurrentTask`, which cannot happen
+        // once the scheduler has started — using `.expect` keeps error handling
+        // consistent with the surrounding IPC calls.
+        (*SCHED.0.get())
             .assume_init_mut()
-            .yield_now((*CPU.0.get()).assume_init_ref());
+            .yield_now((*CPU.0.get()).assume_init_ref())
+            .expect("task B: yield_now after reply failed");
     }
 
     // SAFETY: CONSOLE initialised in kernel_entry; single-core cooperative. Audit: UNSAFE-2026-0010.
@@ -269,7 +281,9 @@ fn task_a() -> ! {
     // called ipc_recv_and_yield and is in RecvWaiting state. The send delivers
     // immediately (Delivered) and ipc_send_and_yield yields to B.
     //
-    // SAFETY: same aliasing invariants as task_b. Audit: UNSAFE-2026-0012.
+    // SAFETY: same aliasing invariants and rejected alternatives as task_b
+    // (raw-pointer refactor deferred to Phase B; Mutex rejected).
+    // Audit: UNSAFE-2026-0012.
     unsafe {
         (*SCHED.0.get())
             .assume_init_mut()
@@ -289,7 +303,9 @@ fn task_a() -> ! {
     // SendPending (B's reply). Calling ipc_recv_and_yield collects it immediately
     // without blocking (SendPending → Received → Idle).
     //
-    // SAFETY: same aliasing invariants as task_b's ipc_recv_and_yield call. Audit: UNSAFE-2026-0012.
+    // SAFETY: same aliasing invariants and rejected alternatives as task_b's
+    // ipc_recv_and_yield call (raw-pointer refactor deferred to Phase B;
+    // Mutex rejected). Audit: UNSAFE-2026-0012.
     let reply_outcome = unsafe {
         (*SCHED.0.get())
             .assume_init_mut()
@@ -376,10 +392,12 @@ pub extern "C" fn kernel_entry() -> ! {
     let ep_handle =
         create_endpoint(&mut ep_arena, Endpoint::new(0)).expect("create_endpoint failed");
 
-    // Both tasks get SEND | RECV so each can both send and receive on the
-    // same endpoint — Task A sends the initial message and receives the reply;
-    // Task B receives the initial message and sends the reply.
-    let ep_rights = CapRights::SEND | CapRights::RECV | CapRights::DUPLICATE;
+    // Least privilege: both tasks need both directions on the same endpoint —
+    // A sends the initial message and receives the reply; B receives the
+    // initial message and sends the reply. Neither task duplicates or
+    // transfers the endpoint capability (every `ipc_*` call passes `None`),
+    // so DUPLICATE and TRANSFER rights are deliberately omitted.
+    let ep_rights = CapRights::SEND | CapRights::RECV;
 
     let mut table_a = CapabilityTable::new();
     let mut table_b = CapabilityTable::new();

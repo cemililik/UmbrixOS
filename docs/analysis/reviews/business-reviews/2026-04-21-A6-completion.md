@@ -46,7 +46,7 @@ Zero failures. QEMU smoke test confirmed manually.
 
 **Met.** The A6 QEMU trace shows:
 
-```
+```text
 umbrix: hello from kernel_main
 umbrix: starting cooperative scheduler
 umbrix: task B — waiting for IPC
@@ -112,4 +112,4 @@ Phase B's first milestone should address, in roughly this order:
 - [T-005: Two-task IPC demo](../../tasks/phase-a/T-005-two-task-ipc-demo.md)
 - [Two-task demo guide](../../../guides/two-task-demo.md)
 - [Baseline performance review](../performance-optimization-reviews/2026-04-21-A6-baseline.md)
-- [UNSAFE-2026-0012](../../audits/unsafe-log.md)
+- [UNSAFE-2026-0012](../../../audits/unsafe-log.md)

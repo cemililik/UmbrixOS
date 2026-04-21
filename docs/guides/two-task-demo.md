@@ -13,20 +13,20 @@ Phase A's exit bar states: *"two kernel tasks exchange IPC messages under capabi
 
 ## How to run
 
-```
+```shell
 cargo kernel-build          # build debug image (once)
 tools/run-qemu.sh           # run — terminate with Ctrl-A x
 ```
 
 To run the release build:
 
-```
+```shell
 tools/run-qemu.sh --release
 ```
 
 To capture the exception log when debugging a silent hang:
 
-```
+```shell
 tools/run-qemu.sh --int-log
 # after the run:
 grep "Taking exception" /tmp/qemu_int.log
@@ -34,7 +34,7 @@ grep "Taking exception" /tmp/qemu_int.log
 
 ## Expected output
 
-```
+```text
 umbrix: hello from kernel_main
 umbrix: starting cooperative scheduler
 umbrix: task B — waiting for IPC
@@ -44,7 +44,7 @@ umbrix: task A — received reply (label=0xbbbb); done
 umbrix: all tasks complete
 ```
 
-After printing "all tasks complete", Task A enters a `core::hint::spin_loop()` which compiles to `wfe`. The kernel halts in this state; QEMU continues running but produces no further output. Terminate with **Ctrl-A x** (QEMU monitor quit).
+After printing "all tasks complete", Task A enters a `core::hint::spin_loop()`. The kernel halts in this state; QEMU continues running but produces no further output. The specific instruction the hint lowers to is up to the compiler and is not load-bearing — a dedicated `wfe`-based idle path is Phase B work (see ADR-0019 open questions). Terminate with **Ctrl-A x** (QEMU monitor quit).
 
 ## Execution trace
 
@@ -72,14 +72,14 @@ The scheduler adds **Task B first**, then Task A, so B runs first:
 
 ## Capability setup
 
-`kernel_entry` creates one `Endpoint` in the `EndpointArena`, then derives two capabilities — one in `TABLE_A`, one in `TABLE_B` — each with `SEND | RECV | DUPLICATE` rights. The rights needed per operation are:
+`kernel_entry` creates one `Endpoint` in the global `EndpointArena` (`EP_ARENA`), then builds two separate `CapabilityTable`s (`TABLE_A`, `TABLE_B`) and inserts one root capability in each with `CapRights::SEND | CapRights::RECV`. The rights needed per operation are:
 
 | Operation | Right checked |
 |-----------|--------------|
 | `ipc_send_and_yield` | `CapRights::SEND` |
 | `ipc_recv_and_yield` | `CapRights::RECV` |
 
-No capability escapes its owner's table. The tasks never access the `EndpointArena` directly.
+No capability escapes its owner's table. The tasks pass `&mut EP_ARENA` into the scheduler's IPC bridge — `ipc_send_and_yield` / `ipc_recv_and_yield` — so the scheduler can resolve the endpoint object, but the tasks themselves never dereference endpoint storage directly. Every authority check runs against the calling task's own `CapabilityTable`; the `EndpointArena` is only read through the scheduler path, never from a task body.
 
 ## Known limitations (Phase A)
 

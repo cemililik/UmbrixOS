@@ -545,7 +545,7 @@ mod tests {
     /// contract of [`ContextSwitch::init_context`]. `FakeCpu::init_context`
     /// is a no-op, so the alignment is not strictly required by the tests,
     /// but it is stated here so the SAFETY comment is accurate and so the
-    /// helper is reusable if a real init_context is ever wired into tests.
+    /// helper is reusable if a real `init_context` is ever wired into tests.
     #[repr(C, align(16))]
     struct AlignedStack<const N: usize>([u8; N]);
 
