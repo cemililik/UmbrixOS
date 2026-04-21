@@ -11,7 +11,7 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 - **Last completed milestone:** A3 — Kernel objects, on 2026-04-21 (PR merged to `main`).
 - **Last completed task:** [T-002 — Kernel object storage foundation](../analysis/tasks/phase-a/T-002-kernel-object-storage.md) — `Done` 2026-04-21.
 - **Last review:** [A2 completion business review](../analysis/reviews/business-reviews/2026-04-21-A2-completion.md) — 2026-04-21.
-- **Next review trigger:** code + security review of T-003's implementation when it reaches `In Review`; business review waits for A6 per [phase-a.md closure](phases/phase-a.md).
+- **Next review trigger:** PR merge of T-003 to `main` (code + security review currently in progress); A4 business review waits for A6 per [phase-a.md closure](phases/phase-a.md).
 
 ## Notes
 

@@ -451,17 +451,15 @@ impl CapabilityTable {
             return Err(CapError::HasChildren);
         }
         self.unlink_from_siblings(index)?;
-        // Take the SlotEntry out of the slot before bumping the generation.
+        // Extract the capability before freeing the slot so the slot's
+        // generation bump (inside free_slot) does not race the read.
         let entry = self.slots[index as usize]
             .entry
             .take()
             .ok_or(CapError::InvalidHandle)?;
-        // Free-slot bookkeeping (mirrors free_slot, but entry is already None).
-        let old_head = self.free_head;
-        self.free_head = Some(index);
-        self.slots[index as usize].generation =
-            self.slots[index as usize].generation.wrapping_add(1);
-        self.slots[index as usize].next_free = old_head;
+        // Slot entry is already None; free_slot handles the rest
+        // (generation bump, free-list prepend) identically to cap_drop.
+        self.free_slot(index);
         Ok(entry.capability)
     }
 
@@ -917,6 +915,88 @@ mod tests {
         // Revoking first, then dropping, works.
         t.cap_revoke(parent).unwrap();
         assert!(t.cap_drop(parent).is_ok());
+    }
+
+    #[test]
+    fn cap_take_returns_capability_and_invalidates_handle() {
+        let mut t = CapabilityTable::new();
+        let h = t.insert_root(root_cap()).unwrap();
+        let taken = t.cap_take(h).unwrap();
+        assert_eq!(taken.rights(), all_rights());
+        assert_eq!(taken.object(), task_object(0xAA));
+        assert_eq!(t.lookup(h).unwrap_err(), CapError::InvalidHandle);
+    }
+
+    #[test]
+    fn cap_take_on_node_with_children_fails() {
+        let mut t = CapabilityTable::new();
+        let parent = t.insert_root(root_cap()).unwrap();
+        let _child = t.cap_derive(parent, all_rights(), task_object(1)).unwrap();
+        assert_eq!(t.cap_take(parent).unwrap_err(), CapError::HasChildren);
+        // Parent must still be live.
+        assert!(t.lookup(parent).is_ok());
+    }
+
+    #[test]
+    fn cap_take_stale_handle_fails() {
+        let mut t = CapabilityTable::new();
+        let h = t.insert_root(root_cap()).unwrap();
+        t.cap_take(h).unwrap();
+        assert_eq!(t.cap_take(h).unwrap_err(), CapError::InvalidHandle);
+    }
+
+    #[test]
+    fn cap_take_middle_sibling_preserves_list_integrity() {
+        let mut t = CapabilityTable::new();
+        let root = t.insert_root(root_cap()).unwrap();
+        let a = t.cap_derive(root, all_rights(), task_object(1)).unwrap();
+        let b = t.cap_derive(root, all_rights(), task_object(2)).unwrap();
+        let c = t.cap_derive(root, all_rights(), task_object(3)).unwrap();
+        let taken = t.cap_take(b).unwrap();
+        assert_eq!(taken.object(), task_object(2));
+        assert!(t.lookup(a).is_ok());
+        assert!(t.lookup(c).is_ok());
+        assert_eq!(t.lookup(b).unwrap_err(), CapError::InvalidHandle);
+        // Revoking root must still reach both remaining children.
+        t.cap_revoke(root).unwrap();
+        assert_eq!(t.lookup(a).unwrap_err(), CapError::InvalidHandle);
+        assert_eq!(t.lookup(c).unwrap_err(), CapError::InvalidHandle);
+    }
+
+    #[test]
+    fn cap_take_slot_reusable_with_bumped_generation() {
+        let mut t = CapabilityTable::new();
+        let h1 = t.insert_root(root_cap()).unwrap();
+        t.cap_take(h1).unwrap();
+        let h2 = t.insert_root(root_cap()).unwrap();
+        assert_eq!(h1.index(), h2.index(), "slot should be reused");
+        assert_ne!(h1.generation(), h2.generation(), "generation must differ");
+        assert_eq!(t.lookup(h1).unwrap_err(), CapError::InvalidHandle);
+        assert!(t.lookup(h2).is_ok());
+    }
+
+    #[test]
+    fn is_full_transitions() {
+        let mut t = CapabilityTable::new();
+        assert!(!t.is_full());
+
+        let mut handles: [Option<CapHandle>; CAP_TABLE_CAPACITY] = [None; CAP_TABLE_CAPACITY];
+        for h in &mut handles {
+            *h = Some(t.insert_root(root_cap()).unwrap());
+        }
+        assert!(t.is_full());
+
+        // cap_take frees a slot.
+        t.cap_take(handles[0].unwrap()).unwrap();
+        assert!(!t.is_full());
+
+        // Fill it again.
+        let refill = t.insert_root(root_cap()).unwrap();
+        assert!(t.is_full());
+
+        // cap_drop also frees a slot.
+        t.cap_drop(refill).unwrap();
+        assert!(!t.is_full());
     }
 
     #[test]

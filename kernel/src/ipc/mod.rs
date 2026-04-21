@@ -44,7 +44,7 @@
 
 use crate::cap::{CapHandle, CapObject, CapRights, Capability, CapabilityTable};
 use crate::obj::endpoint::{EndpointArena, EndpointHandle};
-use crate::obj::notification::NotificationArena;
+use crate::obj::notification::{NotificationArena, NotificationHandle};
 use crate::obj::ENDPOINT_ARENA_CAPACITY;
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -145,14 +145,26 @@ enum EndpointState {
 /// Indexed by the raw slot index of an [`EndpointHandle`]. Callers must
 /// validate the handle against the [`EndpointArena`] before using it to index
 /// here — the arena's generation check ensures the slot is still live.
+///
+/// ## Generation tracking
+///
+/// Each slot also stores the generation of the endpoint that last wrote to it.
+/// If a new endpoint is allocated in the same slot (after the old one was
+/// destroyed), [`state_of`][Self::state_of] and [`peek_state`][Self::peek_state]
+/// detect the mismatch and reset the slot to `Idle`, preventing the new
+/// endpoint from inheriting stale waiter state (e.g. `RecvWaiting`) left by
+/// its predecessor.
 pub struct IpcQueues {
     states: [EndpointState; ENDPOINT_ARENA_CAPACITY],
+    /// Generation of the endpoint that last occupied each slot.
+    slot_generations: [u32; ENDPOINT_ARENA_CAPACITY],
 }
 
 impl Default for IpcQueues {
     fn default() -> Self {
         Self {
             states: core::array::from_fn(|_| EndpointState::Idle),
+            slot_generations: [0; ENDPOINT_ARENA_CAPACITY],
         }
     }
 }
@@ -164,12 +176,26 @@ impl IpcQueues {
         Self::default()
     }
 
-    fn state_of(&mut self, handle: EndpointHandle) -> &mut EndpointState {
-        &mut self.states[handle.slot().index() as usize]
+    /// Reset the slot to `Idle` if the handle's generation has advanced past
+    /// the recorded generation. Returns the slot index for callers to use.
+    fn sync_generation(&mut self, handle: EndpointHandle) -> usize {
+        let idx = handle.slot().index() as usize;
+        let gen = handle.slot().generation();
+        if self.slot_generations[idx] != gen {
+            self.states[idx] = EndpointState::Idle;
+            self.slot_generations[idx] = gen;
+        }
+        idx
     }
 
-    fn peek_state(&self, handle: EndpointHandle) -> &EndpointState {
-        &self.states[handle.slot().index() as usize]
+    fn state_of(&mut self, handle: EndpointHandle) -> &mut EndpointState {
+        let idx = self.sync_generation(handle);
+        &mut self.states[idx]
+    }
+
+    fn peek_state(&mut self, handle: EndpointHandle) -> &EndpointState {
+        let idx = self.sync_generation(handle);
+        &self.states[idx]
     }
 }
 
@@ -201,10 +227,15 @@ pub fn ipc_send(
     let ep_handle = validate_ep_cap(caller_table, ep_cap, CapRights::SEND)?;
 
     // Pre-flight: validate the transfer cap before touching endpoint state.
+    // Also enforce the TRANSFER right: the caller must hold this right to
+    // include the capability in an IPC message.
     if let Some(xfer) = transfer {
-        caller_table
+        let xfer_cap = caller_table
             .lookup(xfer)
             .map_err(|_| IpcError::InvalidTransferCap)?;
+        if !xfer_cap.rights().contains(CapRights::TRANSFER) {
+            return Err(IpcError::InvalidTransferCap);
+        }
     }
 
     // Confirm the endpoint handle is still live in the arena.
@@ -212,26 +243,36 @@ pub fn ipc_send(
         .get(ep_handle.slot())
         .ok_or(IpcError::InvalidCapability)?;
 
+    // Pre-flight: queue-full check. Peek state non-destructively before any
+    // cap manipulation so that a QueueFull return leaves both the endpoint
+    // state and caller_table unchanged.
+    if matches!(
+        queues.peek_state(ep_handle),
+        EndpointState::SendPending { .. } | EndpointState::RecvComplete { .. }
+    ) {
+        return Err(IpcError::QueueFull);
+    }
+
+    // Take the cap before mutating endpoint state. If cap_take fails (e.g.
+    // HasChildren), endpoint state is left unchanged — in particular,
+    // RecvWaiting is preserved so the registered receiver is not lost.
+    let owned = take_cap_if_some(caller_table, transfer)?;
+
+    // Commit state transition. SendPending / RecvComplete branches are
+    // excluded by the pre-check above.
     let state = queues.state_of(ep_handle);
-    let old = core::mem::replace(state, EndpointState::Idle);
-    match old {
+    match core::mem::replace(state, EndpointState::Idle) {
         EndpointState::RecvWaiting => {
-            // A receiver is waiting. Extract the cap and transition to
-            // RecvComplete so the receiver can pick up the result.
-            let owned = take_cap_if_some(caller_table, transfer)?;
             *state = EndpointState::RecvComplete { msg, cap: owned };
             Ok(SendOutcome::Delivered)
         }
         EndpointState::Idle => {
-            // No receiver. Store the message in the endpoint queue.
-            let owned = take_cap_if_some(caller_table, transfer)?;
             *state = EndpointState::SendPending { msg, cap: owned };
             Ok(SendOutcome::Enqueued)
         }
-        occupied @ (EndpointState::SendPending { .. } | EndpointState::RecvComplete { .. }) => {
-            // Restore the original state unchanged.
-            *state = occupied;
-            Err(IpcError::QueueFull)
+        EndpointState::SendPending { .. } | EndpointState::RecvComplete { .. } => {
+            // Excluded by the pre-check above; unreachable in correct code.
+            unreachable!()
         }
     }
 }
@@ -266,8 +307,13 @@ pub fn ipc_recv(
         .get(ep_handle.slot())
         .ok_or(IpcError::InvalidCapability)?;
 
-    // Pre-flight: if there is a pending cap to transfer, ensure the receiver's
-    // table has room before committing the state transition.
+    // Pre-flight: if the pending state carries a capability, ensure the
+    // receiver's table has room before committing the state transition. This
+    // guarantees that install_cap_if_some(caller_table, cap) cannot fail after
+    // core::mem::replace moves the state to Idle — without this check a full
+    // table would cause us to drop the in-flight capability. If
+    // install_cap_if_some's error conditions or caller_table's capacity
+    // semantics change, this invariant must be revisited.
     let pending_has_cap = matches!(
         queues.peek_state(ep_handle),
         EndpointState::SendPending { cap: Some(_), .. }
@@ -312,19 +358,7 @@ pub fn ipc_notify(
     caller_table: &CapabilityTable,
     bits: u64,
 ) -> Result<(), IpcError> {
-    let notif_handle = {
-        let cap = caller_table
-            .lookup(notif_cap)
-            .map_err(|_| IpcError::InvalidCapability)?;
-        if !cap.rights().contains(CapRights::NOTIFY) {
-            return Err(IpcError::InvalidCapability);
-        }
-        match cap.object() {
-            CapObject::Notification(h) => h,
-            _ => return Err(IpcError::InvalidCapability),
-        }
-    };
-
+    let notif_handle = validate_notif_cap(caller_table, notif_cap)?;
     let notif = notif_arena
         .get_mut(notif_handle.slot())
         .ok_or(IpcError::InvalidCapability)?;
@@ -347,6 +381,22 @@ fn validate_ep_cap(
     }
     match cap.object() {
         CapObject::Endpoint(h) => Ok(h),
+        _ => Err(IpcError::InvalidCapability),
+    }
+}
+
+fn validate_notif_cap(
+    table: &CapabilityTable,
+    notif_cap: CapHandle,
+) -> Result<NotificationHandle, IpcError> {
+    let cap = table
+        .lookup(notif_cap)
+        .map_err(|_| IpcError::InvalidCapability)?;
+    if !cap.rights().contains(CapRights::NOTIFY) {
+        return Err(IpcError::InvalidCapability);
+    }
+    match cap.object() {
+        CapObject::Notification(h) => Ok(h),
         _ => Err(IpcError::InvalidCapability),
     }
 }
@@ -394,6 +444,7 @@ mod tests {
     use crate::cap::{CapHandle, CapObject, CapRights, Capability, CapabilityTable};
     use crate::obj::endpoint::{create_endpoint, Endpoint, EndpointArena, EndpointHandle};
     use crate::obj::notification::{create_notification, Notification, NotificationArena};
+    use crate::obj::TaskHandle;
 
     // ── Setup helpers ────────────────────────────────────────────────────────
 
@@ -430,6 +481,18 @@ mod tests {
             CapObject::Notification(notif_handle),
         );
         table.insert_root(cap).unwrap()
+    }
+
+    fn all_rights() -> CapRights {
+        CapRights::DUPLICATE | CapRights::DERIVE | CapRights::REVOKE | CapRights::TRANSFER
+    }
+
+    fn task_object(tag: u16) -> CapObject {
+        CapObject::Task(TaskHandle::test_handle(tag, 0))
+    }
+
+    fn root_cap() -> Capability {
+        Capability::new(all_rights(), task_object(0xAA))
     }
 
     fn test_msg(label: u64) -> Message {
@@ -531,12 +594,7 @@ mod tests {
         let (ep_handle, ep_cap) = setup_ep(&mut sender_table, &mut ep_arena, all_ep_rights());
 
         // Give sender a second endpoint cap to transfer.
-        let (_, xfer_ep_handle) = {
-            let h = create_endpoint(&mut ep_arena, Endpoint::new(1)).unwrap();
-            let c = Capability::new(all_ep_rights(), CapObject::Endpoint(h));
-            let ch = sender_table.insert_root(c).unwrap();
-            (ch, h)
-        };
+        let xfer_ep_handle = create_endpoint(&mut ep_arena, Endpoint::new(1)).unwrap();
         let xfer_cap_h = {
             let c = Capability::new(all_task_rights(), CapObject::Endpoint(xfer_ep_handle));
             sender_table.insert_root(c).unwrap()
@@ -587,12 +645,7 @@ mod tests {
 
         // Sender with a cap to transfer.
         let mut sender_table = CapabilityTable::new();
-        let (_, task_ep_handle) = {
-            let h = create_endpoint(&mut ep_arena, Endpoint::new(2)).unwrap();
-            let c = Capability::new(all_ep_rights(), CapObject::Endpoint(h));
-            let ch = sender_table.insert_root(c).unwrap();
-            (ch, h)
-        };
+        let task_ep_handle = create_endpoint(&mut ep_arena, Endpoint::new(2)).unwrap();
         let xfer_cap_h = {
             let c = Capability::new(all_task_rights(), CapObject::Endpoint(task_ep_handle));
             sender_table.insert_root(c).unwrap()
@@ -708,6 +761,113 @@ mod tests {
             ipc_recv(&mut ep_arena, &mut queues, ep_cap, &mut table).unwrap_err(),
             IpcError::QueueFull
         );
+    }
+
+    // ── state-preservation on failed send ────────────────────────────────────
+
+    #[test]
+    fn send_with_bad_transfer_cap_preserves_recv_waiting() {
+        // Regression: if cap_take fails (e.g. HasChildren), ipc_send must
+        // leave a RecvWaiting endpoint in RecvWaiting — not silently reset it
+        // to Idle, which would lose the registered receiver.
+        let mut recv_table = CapabilityTable::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let (ep_handle, recv_ep_cap) = setup_ep(&mut recv_table, &mut ep_arena, all_ep_rights());
+
+        // Receiver registers — endpoint transitions to RecvWaiting.
+        ipc_recv(&mut ep_arena, &mut queues, recv_ep_cap, &mut recv_table).unwrap();
+
+        // Build a transfer cap that has a child (cap_take must fail HasChildren).
+        let mut sender_table = CapabilityTable::new();
+        let sender_ep_cap = {
+            let c = Capability::new(all_ep_rights(), CapObject::Endpoint(ep_handle));
+            sender_table.insert_root(c).unwrap()
+        };
+        let parent_h = sender_table.insert_root(root_cap()).unwrap();
+        let _child_h = sender_table
+            .cap_derive(parent_h, all_rights(), task_object(1))
+            .unwrap();
+        // parent_h has a child → cap_take will return HasChildren.
+        let err = ipc_send(
+            &mut ep_arena,
+            &mut queues,
+            sender_ep_cap,
+            &mut sender_table,
+            test_msg(0),
+            Some(parent_h),
+        )
+        .unwrap_err();
+        assert_eq!(err, IpcError::InvalidTransferCap);
+
+        // RecvWaiting must still be intact: a second recv attempt returns
+        // QueueFull (one receiver already registered), not Pending.
+        let err2 = ipc_recv(&mut ep_arena, &mut queues, recv_ep_cap, &mut recv_table).unwrap_err();
+        assert_eq!(err2, IpcError::QueueFull);
+    }
+
+    // ── TRANSFER right enforcement ────────────────────────────────────────────
+
+    #[test]
+    fn send_without_transfer_right_on_xfer_cap_fails() {
+        let mut table = CapabilityTable::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let (_, ep_cap) = setup_ep(&mut table, &mut ep_arena, all_ep_rights());
+
+        // A cap without TRANSFER right.
+        let no_transfer_h = {
+            let c = Capability::new(CapRights::DUPLICATE | CapRights::DERIVE, task_object(1));
+            table.insert_root(c).unwrap()
+        };
+        assert_eq!(
+            ipc_send(
+                &mut ep_arena,
+                &mut queues,
+                ep_cap,
+                &mut table,
+                test_msg(0),
+                Some(no_transfer_h),
+            )
+            .unwrap_err(),
+            IpcError::InvalidTransferCap
+        );
+    }
+
+    // ── stale IpcQueues state reset on endpoint slot reuse ────────────────────
+
+    #[test]
+    fn stale_queue_state_reset_on_slot_reuse() {
+        use crate::obj::endpoint::destroy_endpoint;
+        let mut table = CapabilityTable::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let (ep_handle, ep_cap) = setup_ep(&mut table, &mut ep_arena, all_ep_rights());
+
+        // Put the endpoint into RecvWaiting.
+        ipc_recv(&mut ep_arena, &mut queues, ep_cap, &mut table).unwrap();
+
+        // Destroy the endpoint (bumps slot generation).
+        table.cap_drop(ep_cap).unwrap();
+        destroy_endpoint(&mut ep_arena, ep_handle).unwrap();
+
+        // Allocate a fresh endpoint in what may be the same slot.
+        let (new_ep_handle, new_ep_cap) = setup_ep(&mut table, &mut ep_arena, all_ep_rights());
+        let _ = new_ep_handle; // may or may not reuse the slot
+
+        // The new endpoint must start in Idle, not inherit RecvWaiting.
+        // Verify by sending — if state were RecvWaiting it would return
+        // Delivered; if Idle it returns Enqueued.
+        let outcome = ipc_send(
+            &mut ep_arena,
+            &mut queues,
+            new_ep_cap,
+            &mut table,
+            test_msg(7),
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome, SendOutcome::Enqueued);
     }
 
     // ── notify ───────────────────────────────────────────────────────────────

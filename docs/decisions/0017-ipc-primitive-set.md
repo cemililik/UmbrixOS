@@ -193,7 +193,7 @@ The `notify` operation is non-blocking: it ORs bits into the `Notification` word
 
 ### Option H — Multiple capabilities per message
 
-- Pro: more expressive; covers protocols that handoff a set of capabilities atomically.
+- Pro: more expressive; covers protocols that hand off a set of capabilities atomically.
 - Con: no A4/A6 scenario requires it; adding a loop and array before there is a test case is premature complexity.
 
 ### Option I — No capability transfer in A4

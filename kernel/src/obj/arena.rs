@@ -38,8 +38,8 @@ impl SlotId {
         self.index
     }
 
-    /// Raw generation component. Crate-internal; exposed for tests.
-    #[cfg(test)]
+    /// Raw generation component. Crate-internal; used by the IPC layer to
+    /// detect stale waiter state after endpoint slot reuse.
     #[must_use]
     pub(crate) const fn generation(self) -> Generation {
         self.generation

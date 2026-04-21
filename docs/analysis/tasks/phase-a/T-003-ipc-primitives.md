@@ -7,7 +7,7 @@
 - **Author:** @cemililik
 - **Dependencies:** T-002 — Kernel object storage foundation (Done)
 - **Informs:** T-004 (cooperative scheduler / context switch — A5); T-005 (two-task IPC demo — A6)
-- **ADRs required:** ADR-0017 (IPC primitive set) — must be Accepted before code lands; ADR-0018 (Badge scheme) — Accepted or explicitly deferred before A4 closes.
+- **ADRs required:** ADR-0017 (IPC primitive set) — Accepted 2026-04-21; ADR-0018 (Badge scheme) — deferred per ADR-0017 §"Open questions".
 
 ---
 
@@ -80,8 +80,8 @@ Design is pinned in ADR-0017. At a sketch level:
 ## References
 
 - [ADR-0016: Kernel object storage](../../../decisions/0016-kernel-object-storage.md) — the A3 foundation this task extends.
-- [ADR-0017: IPC primitive set](../../../decisions/0017-ipc-primitive-set.md) *(to be written before code lands)*.
-- [ADR-0018: Badge scheme](../../../decisions/0018-badge-scheme.md) *(to be written or explicitly deferred in A4)*.
+- [ADR-0017: IPC primitive set](../../../decisions/0017-ipc-primitive-set.md) — Accepted 2026-04-21.
+- [ADR-0018: Badge scheme](../../../decisions/0018-badge-scheme.md) — deferred; see ADR-0017 §"Open questions" for the deferral rationale and revisit trigger.
 - [Phase A plan](../../../roadmap/phases/phase-a.md) — A4 sub-breakdown and acceptance criteria.
 - [T-002](T-002-kernel-object-storage.md) — delivers the `Endpoint` and `Notification` objects this task wires up.
 - seL4 IPC model — synchronous rendezvous with capability transfer (prior art; badge scheme not adopted in v1).
