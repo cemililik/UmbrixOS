@@ -73,6 +73,7 @@ Skills are short. If a skill needs more than ~200 lines, either (a) the underlyi
 | [sync-adr-index](sync-adr-index/SKILL.md) | Rebuild the ADR index table from the files on disk. |
 | [start-task](start-task/SKILL.md) | Open a new roadmap task from the user-story template. |
 | [conduct-review](conduct-review/SKILL.md) | Produce a milestone retrospective in `docs/roadmap/reviews/`. |
+| [add-bsp](add-bsp/SKILL.md) | Add a new Board Support Package crate — crate skeleton, boot checklist, console, context switch, smoke test. |
 
 ## Conventions for adding a new skill
 
