@@ -7,7 +7,7 @@
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** Phase A complete (T-001..T-005 all Done). No sibling task dependencies within B0 — T-006 may run in parallel with T-008 (architecture docs) and T-009 (timer init).
 - **Informs:** [T-007 — Idle task + typed scheduler deadlock](T-007-idle-task-typed-deadlock.md) *(not yet opened)*; every subsequent B1..B6 milestone depends on the aliasing story this task settles.
-- **ADRs required:** ADR-0021 *(Raw-pointer scheduler IPC-bridge API; Proposed inside this task, Accepted before code lands)*.
+- **ADRs required:** [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../../../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) *(Proposed 2026-04-22; must be Accepted before implementation commits land)*.
 
 ---
 
@@ -106,3 +106,4 @@ Delegated to **ADR-0021** for the final shape. At a sketch level:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-22 | @cemililik (+ Claude Opus 4.7 agent) | opened; status `In Progress`. ADR-0021 not yet written — writing it is the first step inside this task per phase-b.md's "How to start Phase B". `current.md` updated; T-006 is now the active task. |
+| 2026-04-22 | @cemililik (+ Claude Opus 4.7 agent) | [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../../../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) drafted at status `Proposed`. Four options considered (raw-pointer parameters, scheduler-owns-arenas, continuation-passing, per-task `TaskContext` extensions); raw-pointer parameters chosen. Awaiting maintainer sign-off → `Accepted` before implementation begins. |
