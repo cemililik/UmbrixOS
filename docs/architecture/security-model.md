@@ -286,7 +286,12 @@ These are the load-bearing properties of the security model. Every implementatio
 - **Capabilities are unforgeable.** Userspace never sees raw capability bits; it references its own table by handle.
 - **Capabilities move with consent.** No capability leaves a table without an operation the table's owner initiated.
 - **Capability rights narrow, never broaden, on derivation.** A derived capability cannot grant more than its parent.
-- **Revocation is transitive over a derivation subtree *within a single capability table*.** Revoking a parent invalidates all derived children atomically. In v1, IPC transfer installs the received capability as a new root in the receiver's table (the `ipc_recv` path calls `insert_root`), discarding the cross-table parent-child link — so `cap_revoke` in the sender does not reach copies that have been moved over IPC. Cross-table revocation (a cross-task capability derivation tree) is an open question tracked below; until it is answered, a sender that needs to retain revoke authority over an IPC-transferred right must either (a) refuse to transfer the derived cap and instead transfer a distinct derived child it keeps locally, or (b) accept that the receiver now holds an independent root. Recorded by the [security review of Phase A exit](../analysis/reviews/security-reviews/2026-04-21-umbrix-to-phase-a.md).
+- **Revocation is transitive over a derivation subtree within a single capability table.** Revoking a parent invalidates all derived children atomically.
+  - *v1 scope limitation.* IPC transfer installs the received capability as a new root in the receiver's table — the `ipc_recv` path calls `insert_root`, discarding the cross-table parent-child link.
+  - *Consequence.* `cap_revoke` traverses only within a single table, so a sender's revoke does not reach copies that have been moved over IPC.
+  - *Workarounds for a sender that needs to retain revoke authority over an IPC-transferred right.* Either (a) refuse to transfer the derived cap and instead transfer a distinct derived child kept locally, or (b) accept that the receiver now holds an independent root.
+  - *Cross-table revocation* (a cross-task capability derivation tree) is an open question tracked below.
+  - Recorded by the [security review of Phase A exit](../analysis/reviews/security-reviews/2026-04-21-umbrix-to-phase-a.md).
 - **A sender cannot transfer authority it does not hold.** The kernel validates every claimed capability at send time.
 - **The kernel never dereferences raw userspace pointers.** Access goes through validated mappings.
 - **Drivers are userspace tasks.** No driver code executes in privileged mode.

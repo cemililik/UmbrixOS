@@ -160,7 +160,11 @@ static EP_CAP_B: StaticCell<CapHandle> = StaticCell::new();
 // ─── Task B ───────────────────────────────────────────────────────────────────
 
 /// IPC demo — receiver side. Registers as receiver on the endpoint, waits for
-/// Task A's message, then sends a reply. Yields cooperatively before spinning.
+/// Task A's message, then sends a reply and yields to Task A. Control does not
+/// return from that final yield in the v1 single-round demo: Task A's
+/// `ipc_recv_and_yield` picks up the reply without blocking and runs to its
+/// own spin loop. The tail-end `loop { spin_loop() }` therefore satisfies the
+/// `fn() -> !` return type but is structurally unreachable.
 fn task_b() -> ! {
     // SAFETY: CONSOLE is fully initialised in `kernel_entry` before `start()`;
     // single-core cooperative scheduling prevents concurrent access.
@@ -254,9 +258,12 @@ fn task_b() -> ! {
             .expect("task B: yield_now after reply failed");
     }
 
-    // SAFETY: CONSOLE initialised in kernel_entry; single-core cooperative. Audit: UNSAFE-2026-0010.
-    let console = unsafe { (*CONSOLE.0.get()).assume_init_ref() };
-    console.write_bytes(b"umbrix: task B -- done; spinning\n");
+    // Unreachable in the v1 single-round demo — see the task_b doc comment.
+    // The loop satisfies `fn() -> !`; Task A's `ipc_recv_and_yield` runs to
+    // its own spin loop without yielding back, so no further Task B code
+    // executes. A post-reply epilogue would require either a dedicated
+    // rendezvous (e.g. a completion notification) or an extra yield from
+    // Task A, both out of scope for A6.
     loop {
         core::hint::spin_loop();
     }
