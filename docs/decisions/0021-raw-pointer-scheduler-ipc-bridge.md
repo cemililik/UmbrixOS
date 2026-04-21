@@ -1,6 +1,6 @@
 # 0021 — Raw-pointer scheduler IPC-bridge API
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-04-22
 - **Deciders:** @cemililik
 
