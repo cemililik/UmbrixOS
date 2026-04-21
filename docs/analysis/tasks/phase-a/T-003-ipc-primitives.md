@@ -2,7 +2,7 @@
 
 - **Phase:** A
 - **Milestone:** A4 — IPC primitives
-- **Status:** Draft
+- **Status:** In Progress
 - **Created:** 2026-04-21
 - **Author:** @cemililik
 - **Dependencies:** T-002 — Kernel object storage foundation (Done)
@@ -91,3 +91,5 @@ Design is pinned in ADR-0017. At a sketch level:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-21 | @cemililik | opened; status Draft — ADR-0017 not yet written; A4 blocked until ADR-0017 Accepted. |
+| 2026-04-21 | @cemililik | ADR-0017 Accepted; status → Ready. Implementation may begin. |
+| 2026-04-21 | @cemililik | status → In Progress; implementation begins on `development`. |

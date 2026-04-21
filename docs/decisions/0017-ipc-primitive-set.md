@@ -1,6 +1,6 @@
 # 0017 — IPC primitive set
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-04-21
 - **Deciders:** @cemililik
 
