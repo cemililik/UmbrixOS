@@ -14,7 +14,7 @@
 //!
 //! [ADR-0020]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0020-cpu-trait-v2-context-switch.md
 
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 
 use umbrix_hal::{ContextSwitch, CoreId, Cpu, IrqState};
 
@@ -149,53 +149,56 @@ pub struct Aarch64TaskContext {
 /// - The caller is responsible for disabling interrupts before calling this
 ///   function.
 ///
+/// `#[unsafe(naked)]` suppresses the compiler-generated prologue/epilogue so
+/// that `sp` is saved and restored exactly, with no hidden adjustment. Without
+/// it the compiler pushes a frame onto the stack before our asm runs, causing
+/// the saved `sp` to be 16 bytes too low — the caller's epilogue then reads
+/// callee-saved registers from the wrong stack addresses after a context switch.
+///
+/// Registers arrive per AAPCS64: `current` → x0, `next` → x1.
+/// x8 is used as a scratch register (caller-saved; the asm clobbers it).
+///
 /// Audit: UNSAFE-2026-0008.
-unsafe fn context_switch_asm(current: *mut Aarch64TaskContext, next: *const Aarch64TaskContext) {
+#[unsafe(naked)]
+unsafe extern "C" fn context_switch_asm(
+    current: *mut Aarch64TaskContext,
+    next: *const Aarch64TaskContext,
+) {
     // Field offsets within Aarch64TaskContext (repr(C)):
     //   x19_x28  offset   0  (10 × 8 = 80 bytes)
     //   fp       offset  80
     //   lr       offset  88
     //   sp       offset  96
     //
-    // We save sp via `mov x2, sp` because `str sp, [x0, #96]` is not valid
-    // in AArch64 — sp cannot be used as a source in most store instructions.
-    // SAFETY: inline assembly that saves/restores callee-saved registers.
-    // The register constraints and memory clobbers are stated explicitly.
-    // Audit: UNSAFE-2026-0008.
-    unsafe {
-        asm!(
-            // ── save current ────────────────────────────────────────────────
-            "stp x19, x20, [{cur},  #0]",
-            "stp x21, x22, [{cur},  #16]",
-            "stp x23, x24, [{cur},  #32]",
-            "stp x25, x26, [{cur},  #48]",
-            "stp x27, x28, [{cur},  #64]",
-            "stp x29, x30, [{cur},  #80]",   // fp, lr
-            "mov x8,  sp",
-            "str x8,  [{cur}, #96]",          // sp
+    // sp cannot appear as a source operand in most AArch64 store instructions,
+    // so we move it through x8 (a caller-saved scratch register).
+    naked_asm!(
+        // ── save current (x0) ───────────────────────────────────────────
+        "stp x19, x20, [x0,  #0]",
+        "stp x21, x22, [x0,  #16]",
+        "stp x23, x24, [x0,  #32]",
+        "stp x25, x26, [x0,  #48]",
+        "stp x27, x28, [x0,  #64]",
+        "stp x29, x30, [x0,  #80]",   // fp, lr
+        "mov x8,  sp",
+        "str x8,  [x0, #96]",          // sp
 
-            // ── restore next ─────────────────────────────────────────────────
-            "ldr x8,  [{nxt}, #96]",          // sp
-            "mov sp,  x8",
-            "ldp x29, x30, [{nxt}, #80]",    // fp, lr
-            "ldp x27, x28, [{nxt}, #64]",
-            "ldp x25, x26, [{nxt}, #48]",
-            "ldp x23, x24, [{nxt}, #32]",
-            "ldp x21, x22, [{nxt}, #16]",
-            "ldp x19, x20, [{nxt},  #0]",
+        // ── restore next (x1) ───────────────────────────────────────────
+        "ldr x8,  [x1, #96]",          // sp
+        "mov sp,  x8",
+        "ldp x29, x30, [x1, #80]",    // fp, lr
+        "ldp x27, x28, [x1, #64]",
+        "ldp x25, x26, [x1, #48]",
+        "ldp x23, x24, [x1, #32]",
+        "ldp x21, x22, [x1, #16]",
+        "ldp x19, x20, [x1,  #0]",
 
-            // ret jumps to the lr we just loaded from `next`.
-            // For a task's first run, that lr was set to the entry fn by
-            // init_context_inner.
-            "ret",
-
-            cur = in(reg) current,
-            nxt = in(reg) next,
-            // All callee-saved regs are clobbered by the restore.
-            out("x8") _,
-            options(nostack),
-        );
-    }
+        // ret jumps to the lr just loaded from `next`.
+        // On a task's first run that lr was set by init_context to the
+        // entry function; on subsequent runs it is the return address
+        // stored by the `bl context_switch_asm` in the previous yield.
+        "ret",
+    );
 }
 
 // ─── ContextSwitch impl ───────────────────────────────────────────────────────
@@ -209,8 +212,8 @@ impl ContextSwitch for QemuVirtCpu {
         // the AAPCS64 callee-save contract. Audit: UNSAFE-2026-0008.
         unsafe {
             context_switch_asm(
-                current as *mut Aarch64TaskContext,
-                next as *const Aarch64TaskContext,
+                core::ptr::from_mut::<Aarch64TaskContext>(current),
+                core::ptr::from_ref::<Aarch64TaskContext>(next),
             );
         }
     }

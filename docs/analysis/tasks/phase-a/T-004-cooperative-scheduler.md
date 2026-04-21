@@ -2,7 +2,7 @@
 
 - **Phase:** A
 - **Milestone:** A5 — Cooperative scheduler and context switch
-- **Status:** In Progress
+- **Status:** Done
 - **Created:** 2026-04-21
 - **Author:** @cemililik
 - **Dependencies:** T-003 — IPC primitives (Done)
@@ -32,14 +32,14 @@ The actual assembly for saving and restoring aarch64 register state (callee-save
 
 - [x] **ADR-0019 Accepted** — 2026-04-21. Settles: single bounded FIFO queue, yield-to-next-ready, `TaskState { Idle, Ready, Blocked }`, scheduler as IPC orchestration layer.
 - [x] **ADR-0020 Accepted** — 2026-04-21. Settles: separate `ContextSwitch` trait, `unsafe context_switch` / `init_context`, aarch64 frame (x19–x28 + fp + lr + sp = 104 bytes).
-- [ ] **`Cpu` trait v2** lands in `umbrix-hal`; the BSP `QemuVirtCpu` implements it.
-- [ ] **Context-switch assembly** in `bsp-qemu-virt`, behind a safe Rust wrapper; `unsafe` block audited per [`unsafe-policy.md`](../../../standards/unsafe-policy.md).
-- [ ] **Scheduler queue** in `kernel::sched`: bounded, heap-free. Shape decided by ADR-0019.
-- [ ] **`yield_now` kernel operation**: moves the current task to the back of the ready queue and switches to the head.
-- [ ] **IPC integration**: when `ipc_recv` finds no sender (returns `RecvOutcome::Pending`), the scheduler removes the calling task from the ready queue and parks it. When `ipc_send` delivers to a waiting receiver (returns `SendOutcome::Delivered`), the scheduler re-enqueues the receiver.
-- [ ] **Host tests** for scheduler data structures (enqueue, dequeue, block, unblock).
-- [ ] **QEMU smoke test**: two kernel-level tasks yield back and forth; console shows alternating output from each task.
-- [ ] **No new `unsafe`** beyond the context-switch wrapper. If any additional `unsafe` lands, audit entry per [`unsafe-policy.md`](../../../standards/unsafe-policy.md).
+- [x] **`Cpu` trait v2** lands in `umbrix-hal`; the BSP `QemuVirtCpu` implements it.
+- [x] **Context-switch assembly** in `bsp-qemu-virt`, behind a safe Rust wrapper; `unsafe` block audited per [`unsafe-policy.md`](../../../standards/unsafe-policy.md).
+- [x] **Scheduler queue** in `kernel::sched`: bounded, heap-free. Shape decided by ADR-0019.
+- [x] **`yield_now` kernel operation**: moves the current task to the back of the ready queue and switches to the head.
+- [x] **IPC integration**: when `ipc_recv` finds no sender (returns `RecvOutcome::Pending`), the scheduler removes the calling task from the ready queue and parks it. When `ipc_send` delivers to a waiting receiver (returns `SendOutcome::Delivered`), the scheduler re-enqueues the receiver.
+- [x] **Host tests** for scheduler data structures (enqueue, dequeue, block, unblock).
+- [x] **QEMU smoke test**: two kernel-level tasks yield back and forth; console shows alternating output from each task.
+- [x] **No new `unsafe`** beyond the context-switch wrapper. If any additional `unsafe` lands, audit entry per [`unsafe-policy.md`](../../../standards/unsafe-policy.md).
 
 ## Out of scope
 
@@ -61,14 +61,14 @@ Design is delegated to ADR-0019 and ADR-0020. At a sketch level:
 
 ## Definition of done
 
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo host-clippy` clean.
-- [ ] `cargo kernel-clippy` clean.
-- [ ] `cargo host-test` passes with new scheduler unit tests.
-- [ ] QEMU smoke test runs and prints alternating task output (manual check or CI run).
-- [ ] `unsafe` in context-switch wrapper has a `# Safety` section and an audit entry.
-- [ ] Commit(s) follow [`commit-style.md`](../../../standards/commit-style.md).
-- [ ] [`current.md`](../../../roadmap/current.md) updated on each status transition.
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo host-clippy` clean.
+- [x] `cargo kernel-clippy` clean.
+- [x] `cargo host-test` passes with new scheduler unit tests.
+- [x] QEMU smoke test runs and prints alternating task output (manual check or CI run).
+- [x] `unsafe` in context-switch wrapper has a `# Safety` section and an audit entry.
+- [x] Commit(s) follow [`commit-style.md`](../../../standards/commit-style.md).
+- [x] [`current.md`](../../../roadmap/current.md) updated on each status transition.
 
 ## Design notes
 
@@ -92,3 +92,4 @@ Design is delegated to ADR-0019 and ADR-0020. At a sketch level:
 |------|----------|------|
 | 2026-04-21 | @cemililik | opened; status Draft — ADR-0019 and ADR-0020 not yet written; A5 blocked until both Accepted. |
 | 2026-04-21 | @cemililik | ADR-0019 and ADR-0020 both Accepted; status → Ready. Implementation may begin. |
+| 2026-04-21 | @cemililik | Implementation complete; QEMU smoke confirms alternating A/B output × 3 iterations. Three bugs fixed: IrqGuard fat-pointer vtable → generic `IrqGuard<C: Cpu>`; CPACR_EL1.FPEN not set → NEON trap at EL1; context_switch_asm compiler prologue corrupted saved sp → `#[unsafe(naked)]`. Status → Done. |

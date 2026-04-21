@@ -83,6 +83,10 @@ pub trait Cpu: Send + Sync {
 /// correctly — dropping an inner guard leaves the outer section's mask
 /// in place rather than fully re-enabling interrupts.
 ///
+/// Generic over the concrete CPU type `C` to avoid fat-pointer vtable
+/// dispatch, which can generate incorrect vtable references when the
+/// coercion site is inlined near large `.rodata` constants.
+///
 /// # Example
 ///
 /// ```ignore
@@ -92,23 +96,23 @@ pub trait Cpu: Send + Sync {
 /// // critical section: interrupts are masked here
 /// // `_g` drops at end of scope; interrupts restored to previous state
 /// ```
-pub struct IrqGuard<'a> {
-    cpu: &'a dyn Cpu,
+pub struct IrqGuard<'a, C: Cpu> {
+    cpu: &'a C,
     prev: IrqState,
 }
 
-impl<'a> IrqGuard<'a> {
+impl<'a, C: Cpu> IrqGuard<'a, C> {
     /// Enter a critical section by masking interrupts on the current core.
     ///
     /// The interrupt state at the moment of construction is remembered and
     /// restored when the returned guard is dropped.
-    pub fn new(cpu: &'a dyn Cpu) -> Self {
+    pub fn new(cpu: &'a C) -> Self {
         let prev = cpu.disable_irqs();
         Self { cpu, prev }
     }
 }
 
-impl Drop for IrqGuard<'_> {
+impl<C: Cpu> Drop for IrqGuard<'_, C> {
     fn drop(&mut self) {
         self.cpu.restore_irq_state(self.prev);
     }
