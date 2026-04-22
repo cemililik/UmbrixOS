@@ -152,6 +152,12 @@ Option E (single `Deadlock` variant) is rejected because it conflates the IPC re
 - Pro: `start`'s empty-queue panic is kept where the invariant is violated — a boot-time kernel-entry programming error has a panic, a runtime fault has an `Err`.
 - Con: `SchedError::Deadlock` is dead-variant-shaped at v1 because idle registration makes it unreachable; T-011 adds a direct unit test to keep the variant live.
 
+## Revision notes
+
+- **2026-04-22 — T-007 implementation rider.** Option A's *Decision outcome* paragraph described idle's body as `cpu.wait_for_interrupt()` + `yield_now`. During T-007 implementation, QEMU smoke confirmed that this hangs the v1 demo: FIFO scheduling dispatches idle between two ready application tasks (e.g. after Task A's `ipc_send_and_yield` unblocks Task B and yields, the ready queue head becomes idle before B), and with **no IRQ source configured in v1** (timer wiring is T-009), `wfi` suspends the core indefinitely. The hang is a trace truncation at "Task A — sending IPC" — the demo never reaches B's reply.
+  The fix lands in T-007: idle's body is `core::hint::spin_loop()` + `yield_now` for now. Shape and registration path are unchanged; only the suspend primitive is deferred. When T-009 wires a timer IRQ (and guarantees a periodic wake source), idle's body becomes `wait_for_interrupt` + `yield_now` and no other call site moves. Option A's "yield_now's single-ready fast path collapses solo-idle to a tight WFI loop" claim is therefore **accurate only once a wake source exists**; until then idle spin-yields.
+  This rider does not change the chosen option. It corrects the *Decision outcome*'s implied workload claim (WFI is cheap only when there is something to wake you up) and it records the T-006-retro's "trace the call graph" lesson applied in hindsight: the ADR assumed idle would run rarely and briefly, but FIFO places idle at the head of the ready queue on a regular cadence, making WFI's IRQ-source dependency load-bearing even for the two-task demo. **Cost of the adjustment:** one extra context switch per inter-task yield when idle happens to sit at the head — acceptable for v1; revisited when performance measurements are wired in T-009.
+
 ## References
 
 - [ADR-0013 — Roadmap and planning process](0013-roadmap-and-planning.md) — the planning framework this ADR fits under.

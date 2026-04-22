@@ -156,6 +156,11 @@ impl TaskStack {
 static TASK_A_STACK: TaskStack = TaskStack::new();
 /// Stack for task B.
 static TASK_B_STACK: TaskStack = TaskStack::new();
+/// Stack for the kernel idle task (ADR-0022). Sized the same as application
+/// task stacks — the idle loop's `wfi` + `yield_now` path uses far less than
+/// 4 KiB, but keeping a uniform `TaskStack` avoids a second static type just
+/// for the idle path.
+static TASK_IDLE_STACK: TaskStack = TaskStack::new();
 
 // ─── Global kernel state ──────────────────────────────────────────────────────
 
@@ -197,6 +202,49 @@ static EP_CAP_B: StaticCell<CapHandle> = StaticCell::new();
 ///
 /// [ADR-0016]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0016-kernel-object-storage.md
 static TASK_ARENA: StaticCell<TaskArena> = StaticCell::new();
+
+// ─── Idle task ────────────────────────────────────────────────────────────────
+
+/// Kernel idle task — runs when no application task is ready.
+///
+/// Per [ADR-0022], the BSP owns the idle entry. The loop is a
+/// `spin_loop` + `yield_now` — **not** `wfi` + `yield_now` — until a
+/// timer IRQ source lands (T-009). In the v1 workload there is no IRQ
+/// configured; a `wfi` here would suspend the core indefinitely the first
+/// time FIFO scheduling dispatches idle between two ready application
+/// tasks, hanging the demo. The spin-yield form keeps the kernel live and
+/// the demo's cooperative-round-trip trace intact, at the cost of one
+/// extra context switch per inter-task yield when idle happens to sit at
+/// the head of the ready queue. ADR-0022 *Revision notes* records this
+/// adjustment.
+///
+/// When T-009 wires a timer IRQ (and a fallback wake source is guaranteed),
+/// this loop's body becomes `cpu.wait_for_interrupt(); yield_now(...)`.
+/// The shape of the function and its registration path stay the same.
+///
+/// Full IPC-graph deadlock (every task blocked + no IRQ source) is
+/// visible today as "idle spin-yielding forever", not a panic — the
+/// kernel stays live; typed `SchedError::Deadlock` is reachable only if
+/// the BSP did not register idle at all.
+///
+/// [ADR-0022]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0022-idle-task-and-typed-scheduler-deadlock.md
+fn idle_entry() -> ! {
+    // SAFETY: CPU is fully initialised in `kernel_entry` before `start()`;
+    // single-core cooperative scheduling prevents concurrent access.
+    // Audit: UNSAFE-2026-0010.
+    let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
+    loop {
+        core::hint::spin_loop();
+        // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer
+        // cast (UNSAFE-2026-0013); idle's stack frame holds no `&mut` to
+        // any shared state across the cooperative switch. `yield_now`
+        // can only return `Err(NoCurrentTask)`, which is impossible once
+        // the scheduler has started. Audit: UNSAFE-2026-0014.
+        unsafe {
+            yield_now(SCHED.as_mut_ptr(), cpu).expect("idle: yield_now failed");
+        }
+    }
+}
 
 // ─── Task B ───────────────────────────────────────────────────────────────────
 
@@ -420,13 +468,14 @@ pub extern "C" fn kernel_entry() -> ! {
         (*TASK_ARENA.0.get()).write(TaskArena::default());
     }
     // SAFETY: `TASK_ARENA` was just written above; momentary `&mut` is
-    // scoped to these two `create_task` calls and drops before any task
+    // scoped to these three `create_task` calls and drops before any task
     // runs. Audit: UNSAFE-2026-0014.
-    let (handle_a, handle_b) = unsafe {
+    let (handle_a, handle_b, handle_idle) = unsafe {
         let arena = &mut *TASK_ARENA.as_mut_ptr();
         let ha = create_task(arena, Task::new(0)).expect("create_task A failed");
         let hb = create_task(arena, Task::new(1)).expect("create_task B failed");
-        (ha, hb)
+        let hi = create_task(arena, Task::new(2)).expect("create_task idle failed");
+        (ha, hb, hi)
     };
 
     // ── IPC infrastructure ────────────────────────────────────────────────────
@@ -473,6 +522,8 @@ pub extern "C" fn kernel_entry() -> ! {
     // Task B is added FIRST so the scheduler runs B before A. B calls
     // ipc_recv_and_yield and enters RecvWaiting; only then does A call
     // ipc_send_and_yield, ensuring Delivered (not Enqueued) on the first send.
+    // The idle task (ADR-0022) is added LAST so it sits behind B and A in
+    // the FIFO — it only ever runs when both application tasks are blocked.
     //
     // SAFETY: add_task calls init_context; stack tops are 16-byte aligned
     // (guaranteed by TaskStack's repr) and remain valid for the process
@@ -484,6 +535,9 @@ pub extern "C" fn kernel_entry() -> ! {
         sched
             .add_task(cpu, handle_a, task_a, TASK_A_STACK.top())
             .expect("add_task A failed: queue full or arena exhausted");
+        sched
+            .add_task(cpu, handle_idle, idle_entry, TASK_IDLE_STACK.top())
+            .expect("add_task idle failed: queue full or arena exhausted");
     }
 
     // Publish the scheduler before transferring control.
