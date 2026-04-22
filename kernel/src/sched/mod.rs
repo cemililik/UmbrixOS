@@ -224,48 +224,6 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
         Ok(())
     }
 
-    /// Start the scheduler by switching to the first ready task.
-    ///
-    /// Saves throwaway state for the bootstrap context (which is never
-    /// resumed) and restores the first task. Intended to be called exactly
-    /// once from `kernel_main` after tasks have been added.
-    ///
-    /// # IRQ state on task entry
-    ///
-    /// This method creates an `IrqGuard` immediately before the context switch.
-    /// The guard is on the bootstrap stack frame, which is abandoned (never
-    /// resumed). Tasks therefore begin executing with interrupts **masked**
-    /// (DAIF = 0xF). In A5 this is acceptable because no interrupt sources
-    /// are configured; a task that needs interrupts enabled must call
-    /// `cpu.restore_irq_state(IrqState(0))` explicitly. This will be
-    /// revisited when Phase B introduces a timer or other interrupt source.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no tasks have been added (the ready queue is empty).
-    pub fn start(&mut self, cpu: &C) {
-        #[allow(
-            clippy::panic,
-            reason = "empty ready queue is a kernel programming error"
-        )]
-        let Some(next_handle) = self.ready.dequeue() else {
-            panic!("Scheduler::start called with empty ready queue");
-        };
-        let next_idx = next_handle.slot().index() as usize;
-        self.task_states[next_idx] = TaskState::Ready;
-        self.current = Some(next_handle);
-
-        let mut throwaway = C::TaskContext::default();
-        let _guard = IrqGuard::new(cpu);
-        // SAFETY: `next` was written by `add_task` → `init_context`.
-        // Interrupts are disabled by the IrqGuard for the duration of the
-        // switch. The throwaway current context is never restored.
-        // Audit: UNSAFE-2026-0008.
-        unsafe {
-            cpu.context_switch(&mut throwaway, &self.contexts[next_idx]);
-        }
-    }
-
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// Resolve a capability handle to an [`EndpointHandle`].
@@ -296,7 +254,15 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
                 if on == ep {
                     if let Some(handle) = self.task_handles[idx] {
                         self.task_states[idx] = TaskState::Ready;
-                        let _ = self.ready.enqueue(handle);
+                        #[allow(
+                            clippy::panic,
+                            reason = "ready-queue capacity equals task-arena capacity; \
+                                      the running task is not enqueued, so at least one \
+                                      free slot always exists when unblocking a receiver"
+                        )]
+                        let Ok(()) = self.ready.enqueue(handle) else {
+                            panic!("scheduler invariant: ready queue full on unblock");
+                        };
                         return;
                     }
                 }
@@ -335,7 +301,13 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
 //   `EndpointArena`, `IpcQueues`, or `CapabilityTable` may be alive across
 //   `cpu.context_switch`. Each bridge function honours this by confining
 //   `&mut` materialisation to an inner `unsafe` block that ends before the
-//   switch call site.
+//   switch call site. This is a **global** invariant: when a task is
+//   suspended mid-bridge, no other kernel path may hold a `&mut` to the
+//   same referent. The single-core cooperative model satisfies this because
+//   the only concurrent "path" is the task that just resumed via
+//   `cpu.context_switch`, and its own bridge call re-derives raw pointers
+//   from the same `UnsafeCell` interiors without ever materialising an
+//   overlapping `&mut`.
 // - **Distinct task indices.** The internal split-borrow on
 //   `(*sched).contexts[current_idx]` vs `contexts[next_idx]` is sound because
 //   the scheduler never enqueues the running task twice; the two indices are
@@ -346,6 +318,76 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
 //
 // [ADR-0021]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0021-raw-pointer-scheduler-ipc-bridge.md
 
+/// Start the scheduler by switching to the first ready task.
+///
+/// Dequeues the head of the ready queue and restores its saved context,
+/// abandoning the bootstrap stack frame. Intended to be called exactly once
+/// from `kernel_main` after tasks have been added. Does not return.
+///
+/// # IRQ state on task entry
+///
+/// An `IrqGuard` is constructed on the bootstrap frame immediately before
+/// the context switch. Because that frame is never resumed, the guard's
+/// `Drop` never runs; tasks therefore begin executing with interrupts
+/// **masked** (DAIF = 0xF). In A5 this is acceptable because no interrupt
+/// sources are configured; a task that needs interrupts enabled must call
+/// `cpu.restore_irq_state(IrqState(0))` explicitly. Revisited when Phase B
+/// introduces a timer or other interrupt source.
+///
+/// # Panics
+///
+/// Panics if no tasks have been added (the ready queue is empty).
+///
+/// # Safety
+///
+/// See the "Shared safety contract" above. `sched` must satisfy *Pointer
+/// validity* and must not alias any live `&mut Scheduler<C>`. Because the
+/// bootstrap frame is abandoned, this function also honours the "no `&mut`
+/// across the switch" rule — the throwaway context is constructed on a
+/// stack frame that `cpu.context_switch` never returns to.
+pub unsafe fn start<C: ContextSwitch + Cpu>(sched: *mut Scheduler<C>, cpu: &C) -> ! {
+    let next_idx = {
+        // SAFETY: caller contract — `sched` valid and exclusive for this
+        // inner block; `&mut` does not cross the switch below. Audit:
+        // UNSAFE-2026-0014.
+        let s = unsafe { &mut *sched };
+
+        #[allow(
+            clippy::panic,
+            reason = "empty ready queue is a kernel programming error"
+        )]
+        let Some(next_handle) = s.ready.dequeue() else {
+            panic!("scheduler start called with empty ready queue");
+        };
+        let next_idx = next_handle.slot().index() as usize;
+        s.task_states[next_idx] = TaskState::Ready;
+        s.current = Some(next_handle);
+        next_idx
+    }; // `s: &mut Scheduler<C>` drops here.
+
+    let mut throwaway = <C::TaskContext as Default>::default();
+    let _guard = IrqGuard::new(cpu);
+    // SAFETY: `next_idx` is in range (written by `add_task`); interrupts are
+    // masked by `IrqGuard`; the throwaway current context lives on the
+    // abandoned bootstrap stack frame and is never restored. No `&mut
+    // Scheduler<C>` is live — the context pointer is derived from the raw
+    // `sched` pointer. Audit: UNSAFE-2026-0008.
+    unsafe {
+        let ctx_ptr = (*sched).contexts.as_ptr();
+        cpu.context_switch(&mut throwaway, &*ctx_ptr.add(next_idx));
+    }
+
+    // `cpu.context_switch` does not return on this path — the bootstrap
+    // frame is abandoned. The loop satisfies `-> !` defensively.
+    #[allow(
+        clippy::empty_loop,
+        reason = "unreachable: context_switch abandons this frame"
+    )]
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 /// Yield the current task cooperatively.
 ///
 /// Re-enqueues the running task as `Ready` and switches to the head of the
@@ -354,7 +396,14 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
 ///
 /// # Errors
 ///
-/// Returns [`SchedError::NoCurrentTask`] if called before [`Scheduler::start`].
+/// Returns [`SchedError::NoCurrentTask`] if called before [`start`].
+///
+/// # Panics
+///
+/// Panics if the ready queue is somehow full when re-enqueueing the current
+/// task — a scheduler-invariant violation that cannot occur in correct code
+/// (the running task is not in the queue, so at most `TASK_ARENA_CAPACITY-1`
+/// other tasks are enqueued).
 ///
 /// # Safety
 ///
@@ -380,7 +429,14 @@ pub unsafe fn yield_now<C: ContextSwitch + Cpu>(
         // not in the ready queue (it was dequeued when it started running),
         // so at most TASK_ARENA_CAPACITY-1 other tasks are queued.
         s.task_states[current_idx] = TaskState::Ready;
-        let _ = s.ready.enqueue(current_handle);
+        #[allow(
+            clippy::panic,
+            reason = "the running task is not in the ready queue, so at most \
+                      TASK_ARENA_CAPACITY-1 tasks are enqueued; enqueue cannot fail"
+        )]
+        let Ok(()) = s.ready.enqueue(current_handle) else {
+            panic!("scheduler invariant: ready queue full on yield re-enqueue");
+        };
 
         // Dequeue the next task.
         let next_handle = match s.ready.dequeue() {
@@ -401,6 +457,10 @@ pub unsafe fn yield_now<C: ContextSwitch + Cpu>(
     }; // `s: &mut Scheduler<C>` drops here
 
     // Switch window — no `&mut Scheduler<C>` is live.
+    debug_assert_ne!(
+        current_idx, next_idx,
+        "split-borrow invariant: current and next task indices must differ"
+    );
     let _guard = IrqGuard::new(cpu);
     // SAFETY: `current_idx != next_idx` by construction (the running task is
     // never in the ready queue, so `next_handle != current_handle` → distinct
@@ -559,6 +619,10 @@ pub unsafe fn ipc_recv_and_yield<C: ContextSwitch + Cpu>(
     }; // `s: &mut Scheduler<C>` drops here.
 
     // Switch window — no `&mut` is alive.
+    debug_assert_ne!(
+        current_idx, next_idx,
+        "split-borrow invariant: current and next task indices must differ"
+    );
     {
         let _guard = IrqGuard::new(cpu);
         // SAFETY: `current_idx != next_idx` (running task was removed from

@@ -36,7 +36,7 @@ use umbrix_kernel::cap::{CapHandle, CapObject, CapRights, Capability, Capability
 use umbrix_kernel::ipc::{IpcQueues, Message, RecvOutcome};
 use umbrix_kernel::obj::endpoint::{create_endpoint, Endpoint, EndpointArena};
 use umbrix_kernel::obj::task::{create_task, Task, TaskArena};
-use umbrix_kernel::sched::{ipc_recv_and_yield, ipc_send_and_yield, yield_now, Scheduler};
+use umbrix_kernel::sched::{ipc_recv_and_yield, ipc_send_and_yield, start, yield_now, Scheduler};
 
 mod console;
 mod cpu;
@@ -495,12 +495,13 @@ pub extern "C" fn kernel_entry() -> ! {
     console.write_bytes(b"umbrix: starting cooperative scheduler\n");
 
     // Transfer control to Task B (the first ready task). Does not return.
-    // SAFETY: SCHED is fully initialised; contexts set up by add_task.
-    // Audit: UNSAFE-2026-0008.
-    unsafe { (*SCHED.0.get()).assume_init_mut() }.start(cpu);
-
-    loop {
-        core::hint::spin_loop();
+    // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer cast
+    // (UNSAFE-2026-0013); `SCHED` was written above and no other code path
+    // holds a `&mut Scheduler` at this point. `start` honours the raw-pointer
+    // discipline: no `&mut` is live across the initial context switch.
+    // Audit: UNSAFE-2026-0014.
+    unsafe {
+        start(SCHED.as_mut_ptr(), cpu);
     }
 }
 

@@ -92,7 +92,7 @@ Entries are **append-only**. When an `unsafe` region is removed, its entry gains
 ### UNSAFE-2026-0008 — context-switch assembly in `context_switch_asm` and callers
 
 - **Introduced:** 2026-04-21, T-004 / A5 context-switch implementation.
-- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `context_switch_asm` and `QemuVirtCpu::context_switch`; [`kernel/src/sched/mod.rs`](../../kernel/src/sched/mod.rs) — `Scheduler::start`, `yield_now`, `ipc_recv_and_yield`.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `context_switch_asm` and `QemuVirtCpu::context_switch`; [`kernel/src/sched/mod.rs`](../../kernel/src/sched/mod.rs) — `start`, `yield_now`, `ipc_recv_and_yield` (all three are raw-pointer free functions per ADR-0021).
 - **Operation:** Saves `x19`–`x28`, `x29` (fp), `x30` (lr), `sp` to `*current` and restores from `*next` via `STP`/`LDP`/`STR`/`LDR` instructions; returns via `RET` which jumps to the loaded `lr`.
 - **Invariants relied on:**
   - `current` and `next` are distinct (different task indices) wherever the split-borrow pattern is used in `Scheduler`.
@@ -157,6 +157,7 @@ Entries are **append-only**. When an `unsafe` region is removed, its entry gains
 - **Rejected alternatives:** A raw-pointer API eliminates the aliasing entirely — see [ADR-0021](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) (Accepted 2026-04-22). A `Mutex<Scheduler>` would introduce lock overhead and a blocking primitive before the kernel has blocking support; Option B ("scheduler owns the arenas") and Options C/D are weighed in ADR-0021.
 - **Reviewed by:** @cemililik.
 - **Status:** Removed — 2026-04-22, commit `f9b72f8`. T-006 / ADR-0021 reshaped the scheduler's IPC bridge (`Scheduler::ipc_send_and_yield`, `Scheduler::ipc_recv_and_yield`, `Scheduler::yield_now`) from `&mut self` methods into `unsafe fn` free functions over `*mut Scheduler<C>` with `*mut` parameters for every arena and capability table. The BSP's `task_a` / `task_b` now produce each pointer via `StaticCell::as_mut_ptr()` (a plain `UnsafeCell::get().cast()` — see UNSAFE-2026-0013) and never materialise a `&mut` at the call site. Inside the kernel, momentary `&mut` references to `Scheduler`, arenas, queues, and tables live only inside narrow inner blocks that end strictly before `cpu.context_switch` and are reacquired strictly after it returns (see UNSAFE-2026-0014). No `&mut` is alive across the switch. Commit `f9b72f8` lands the refactor; commit `1746bc8` completes the related `TaskArena` migration to a `StaticCell` global. QEMU smoke trace matches the A6 baseline; all 109 host tests remain green.
+- **Post-review rider (2026-04-22, follow-up commit):** The original `f9b72f8` left one `&mut self` path in place — `Scheduler::start` — relying on the fact that its bootstrap `&mut Scheduler` lives on a frame that is never resumed. Although technically sound, this was the same pattern UNSAFE-2026-0012 describes, merely one that happens to be reachable only once. The follow-up commit reshapes `start` into a raw-pointer free function (`sched::start(*mut Scheduler<C>, &C)`), bringing the full scheduler API under the ADR-0021 discipline and eliminating the exception noted here. UNSAFE-2026-0012 now retires without residue.
 
 ### UNSAFE-2026-0013 — `StaticCell::as_mut_ptr` BSP helper
 

@@ -94,6 +94,12 @@ pub enum SendOutcome {
     Delivered,
     /// No receiver was waiting; the message is stored in the endpoint queue.
     /// A subsequent [`ipc_recv`] will drain it.
+    ///
+    /// When used through the scheduler bridge (`ipc_send_and_yield`), this
+    /// outcome means no receiver was unblocked and the bridge did **not**
+    /// yield. The caller is responsible for an explicit `yield_now` if it
+    /// wants another task to run before it continues (e.g. a reply-then-
+    /// resume pattern). See the BSP's `task_b` reply path for an example.
     Enqueued,
 }
 
@@ -178,10 +184,32 @@ impl IpcQueues {
 
     /// Reset the slot to `Idle` if the handle's generation has advanced past
     /// the recorded generation. Returns the slot index for callers to use.
-    fn sync_generation(&mut self, handle: EndpointHandle) -> usize {
+    ///
+    /// # Destruction invariant
+    ///
+    /// When the recorded generation is stale, any in-flight `Capability`
+    /// carried by the old state would be silently dropped here — the
+    /// function has no capability table in which to return it. A blanket
+    /// drain-before-destroy invariant is what future endpoint destruction
+    /// paths must uphold (Phase B); until such a path exists the mismatch
+    /// branch is exercised only by `RecvWaiting` stale state, which carries
+    /// no capability and is therefore safe to reset. The `debug_assert!`
+    /// below catches the moment a destroy path introduces a `Some(cap)`
+    /// leak: if the prior state was `SendPending { cap: Some(_), .. }` or
+    /// `RecvComplete { cap: Some(_), .. }`, destruction forgot to drain.
+    fn reset_if_stale_generation(&mut self, handle: EndpointHandle) -> usize {
         let idx = handle.slot().index() as usize;
         let gen = handle.slot().generation();
         if self.slot_generations[idx] != gen {
+            debug_assert!(
+                !matches!(
+                    self.states[idx],
+                    EndpointState::SendPending { cap: Some(_), .. }
+                        | EndpointState::RecvComplete { cap: Some(_), .. }
+                ),
+                "endpoint slot must be drained before its generation is bumped: \
+                 a SendPending/RecvComplete with Some(cap) would be silently dropped"
+            );
             self.states[idx] = EndpointState::Idle;
             self.slot_generations[idx] = gen;
         }
@@ -189,12 +217,12 @@ impl IpcQueues {
     }
 
     fn state_of(&mut self, handle: EndpointHandle) -> &mut EndpointState {
-        let idx = self.sync_generation(handle);
+        let idx = self.reset_if_stale_generation(handle);
         &mut self.states[idx]
     }
 
     fn peek_state(&mut self, handle: EndpointHandle) -> &EndpointState {
-        let idx = self.sync_generation(handle);
+        let idx = self.reset_if_stale_generation(handle);
         &self.states[idx]
     }
 }
@@ -346,8 +374,17 @@ pub fn ipc_recv(
 ///
 /// The caller must hold a capability on the target notification with the
 /// [`CapRights::NOTIFY`] right. The operation is non-blocking: bits are set
-/// immediately and any registered waiter is recorded for A5's scheduler to
-/// wake. In Phase A4 (no scheduler), only the bit-set is performed.
+/// immediately.
+///
+/// # Waiter wake-up is not yet wired
+///
+/// `Notification` has **no blocking-wait API** in Phases A4 and A5, so the
+/// "wake a waiter" half of notify/wait is intentionally absent. If a future
+/// path allows a task to block on a notification (e.g. a `wait_notify_and_yield`
+/// scheduler bridge), this function must grow a corresponding
+/// `unblock_waiter_on` step — otherwise any waiter would sleep forever
+/// (silent deadlock). Tracked for Phase B alongside the scheduler/IPC
+/// wait-set design.
 ///
 /// # Errors
 ///
