@@ -54,7 +54,7 @@ Cleans up the items the 2026-04-21 Phase-A code and security reviews surfaced. E
 - T-008 — Architecture docs for kernel-objects / IPC / scheduler *(not yet opened)*
 - T-009 — Timer initialisation and CNTPCT_EL0-based measurement *(not yet opened)*
 - T-010 — (optional) Split of T-007 if ADR-0022 scope grows past one task *(not yet opened)*
-- T-011 — Missing-tests bundle (ReceiverTableFull + slot-reuse + deadlock-as-error tests) *(not yet opened)*
+- [T-011 — Missing tests bundle](../../analysis/tasks/phase-b/T-011-missing-tests-bundle.md) — Draft (opened 2026-04-23)
 
 ### Flags to resolve during B0
 
