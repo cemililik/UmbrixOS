@@ -53,10 +53,21 @@ Today `coverage` is informational: `continue-on-error: true` in the workflow. Af
 
 ## Nightly pinning
 
-Miri and cargo-llvm-cov currently use `nightly` (floating). If a nightly regression breaks the pipeline, temporarily pin in the workflow:
+Miri and cargo-llvm-cov use a **pinned** nightly declared via the `NIGHTLY_PIN` env var at the top of [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). Rolling nightly means that a miri or `llvm-tools` regression on the public nightly channel breaks CI without any commit of ours being the cause; pinning isolates us from that.
 
-```yaml
-rustup toolchain install nightly-YYYY-MM-DD --component miri
-```
+Current pin: `nightly-2026-01-15` (set 2026-04-23 when R6 landed).
 
-Open an issue with the pinned date so the pin is not forgotten.
+To bump the pin:
+
+1. Open an issue titled "Bump nightly pin to nightly-YYYY-MM-DD" stating the reason (new Miri check we want, a compiler feature we need, a security advisory, routine refresh).
+2. Update `NIGHTLY_PIN` in `.github/workflows/ci.yml` and the "Current pin" line above.
+3. Run `cargo +nightly-YYYY-MM-DD miri test --workspace --exclude tyrne-bsp-qemu-virt` and `cargo +nightly-YYYY-MM-DD llvm-cov --workspace --exclude tyrne-bsp-qemu-virt --summary-only` locally; make sure both are green on the new pin.
+4. Land the pin bump in its own commit with `Refs:` to the issue.
+
+## Branch protection and `continue-on-error`
+
+The `coverage` job is marked `continue-on-error: true`. GitHub's UI renders this as a **neutral / yellow** verdict rather than green or red. Be deliberate when configuring branch-protection rules:
+
+- **Do not add `coverage` to the required-checks list** while it is informational; the neutral result does not satisfy `required == passing`, so every push would be blocked even when coverage is fine.
+- **Do add `lint-and-host-test`, `kernel-build`, and `miri`** to required checks — those three are the real gates.
+- When coverage flips from informational to enforcing (planned post-T-011), remove `continue-on-error: true` first, confirm a full run is green, then add the job to branch-protection.

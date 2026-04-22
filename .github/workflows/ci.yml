@@ -28,6 +28,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # Pinned nightly for miri + coverage jobs. Rolling nightly means a
+  # miri/llvm-tools regression on the public channel breaks master
+  # without any commit of ours being the cause. Update this pin
+  # intentionally (open an issue citing the pin bump), not silently.
+  # When bumping, also refresh docs/guides/ci.md's "Nightly pinning"
+  # section. Last bumped: 2026-04-23 (initial pin).
+  NIGHTLY_PIN: nightly-2026-01-15
 
 jobs:
   # ─── Fast lane: lint + host tests on stable ─────────────────────────────
@@ -47,6 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -79,6 +87,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -100,24 +109,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust nightly with miri
+      - name: Install pinned nightly with miri
         run: |
-          rustup toolchain install nightly --component miri --no-self-update
-          rustup override set nightly
+          rustup toolchain install $NIGHTLY_PIN --component miri --no-self-update
+          rustup override set $NIGHTLY_PIN
       - name: Cache cargo registry and miri target
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-miri-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-miri-${{ env.NIGHTLY_PIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-miri-
-      - name: cargo +nightly miri setup
-        run: cargo +nightly miri setup
-      - name: cargo +nightly miri test (excl. BSP)
-        run: cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt
+            ${{ runner.os }}-miri-${{ env.NIGHTLY_PIN }}-
+      - name: cargo miri setup
+        run: cargo +$NIGHTLY_PIN miri setup
+      - name: cargo miri test (excl. BSP)
+        run: cargo +$NIGHTLY_PIN miri test --workspace --exclude tyrne-bsp-qemu-virt
 
   # ─── Coverage: informational ────────────────────────────────────────────
   # Produces an lcov report. Does NOT fail on a coverage drop today
@@ -130,20 +140,27 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust nightly with llvm-tools + cargo-llvm-cov
+      - name: Install pinned nightly with llvm-tools
         run: |
-          rustup toolchain install nightly --component llvm-tools-preview --no-self-update
-          rustup override set nightly
-          cargo install --locked cargo-llvm-cov
-      - name: Cache cargo registry and llvm-cov target
+          rustup toolchain install $NIGHTLY_PIN --component llvm-tools-preview --no-self-update
+          rustup override set $NIGHTLY_PIN
+      - name: Cache cargo registry, bin (cargo-llvm-cov), and llvm-cov target
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-llvmcov-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-llvmcov-${{ env.NIGHTLY_PIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-llvmcov-
+            ${{ runner.os }}-llvmcov-${{ env.NIGHTLY_PIN }}-
+      - name: Install cargo-llvm-cov (cached)
+        run: |
+          # `cargo install --locked cargo-llvm-cov` is idempotent: if the
+          # pinned version is already in ~/.cargo/bin from the cache
+          # restore above, this is a no-op (~1 s) instead of a 1-2 min
+          # rebuild.
+          cargo install --locked cargo-llvm-cov
       - name: cargo llvm-cov --summary-only
         run: cargo llvm-cov --workspace --exclude tyrne-bsp-qemu-virt --summary-only

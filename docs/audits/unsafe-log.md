@@ -2,7 +2,12 @@
 
 This log tracks every `unsafe` block, `unsafe fn` declaration, `unsafe impl`, and `unsafe trait` introduced into Tyrne. See [unsafe-policy.md](../standards/unsafe-policy.md) for the policy this log implements and [security-review.md](../standards/security-review.md) for the review pass that signs each entry off.
 
-Entries are **append-only**. When an `unsafe` region is removed, its entry gains a `Removed` status with date and commit; the entry itself is not deleted — the historical reasoning stays on record.
+Entries are **append-only**. The original body of an entry — fields written when the entry was introduced — must not be rewritten once committed. Two forms of post-hoc update are permitted because they preserve the historical record rather than overwriting it:
+
+1. **Status change.** When an `unsafe` region is removed, the `Status:` field flips to `Removed` with a date and commit SHA. The original body stays on record. An explanatory paragraph (e.g. UNSAFE-2026-0012's *Post-review rider*) may follow the `Status:` line in the same entry.
+2. **Amendment.** When an entry's scope expands — a new call site, an additional operation that falls under the same safety argument — an **`Amendment (YYYY-MM-DD, commit SHA): <short title>.`** block is appended to the entry's end. The block restates the additional location / operation / invariants / rejected alternatives explicitly; the original fields are not edited. See UNSAFE-2026-0011 for the canonical example.
+
+Both forms are time-stamped so a reader can reconstruct the entry's state at any past commit. In-place editing of the original body is disallowed and counts as a policy violation (`docs/standards/unsafe-policy.md §3`).
 
 ## Entries
 
@@ -131,19 +136,24 @@ Entries are **append-only**. When an `unsafe` region is removed, its entry gains
 - **Reviewed by:** @cemililik.
 - **Status:** Active.
 
-### UNSAFE-2026-0011 — `unsafe impl Sync for TaskStack` + `TaskStack::top` pointer arithmetic
+### UNSAFE-2026-0011 — `unsafe impl Sync for TaskStack`
 
-- **Introduced:** 2026-04-21, T-004 / A5 BSP bootstrap. Scope extended 2026-04-22 during R1 audit sweep (this commit) to explicitly cover `TaskStack::top`'s inner `unsafe` block.
-- **Location:** [`bsp-qemu-virt/src/main.rs`](../../bsp-qemu-virt/src/main.rs) — `unsafe impl Sync for TaskStack` (the marker) and `TaskStack::top` (the consumer). Both are covered by a single entry because they operate on the same pattern.
-- **Operation:** The `unsafe impl Sync` declares that `&TaskStack` can be shared across threads, allowing `static TASK_A_STACK` / `TASK_B_STACK` / `TASK_IDLE_STACK` to satisfy the `Sync` bound on `static`. `TaskStack::top` dereferences the inner `UnsafeCell<[u8; 4096]>` raw pointer and computes a one-past-end pointer (`add(4096)`) to supply the initial stack pointer to [`ContextSwitch::init_context`].
+- **Introduced:** 2026-04-21, T-004 / A5 BSP bootstrap.
+- **Location:** [`bsp-qemu-virt/src/main.rs`](../../bsp-qemu-virt/src/main.rs) — `unsafe impl Sync for TaskStack`.
+- **Operation:** Declares that `&TaskStack` can be shared across threads, allowing `static TASK_A_STACK` / `TASK_B_STACK` to satisfy the `Sync` bound on `static`.
 - **Invariants relied on:**
   - Single-core cooperative kernel: only one task uses each stack at a time.
-  - The inner `UnsafeCell<[u8; 4096]>` is only accessed via `TaskStack::top`, which returns a raw pointer; no safe reference to the interior is ever materialised at the BSP layer (ADR-0021 compliance).
+  - The inner `UnsafeCell<[u8; 4096]>` is only accessed via `TaskStack::top`, which returns a raw pointer; no safe reference to the interior is ever materialised.
   - Stack lifetimes exceed the tasks that use them (static storage).
-  - `add(4096)` produces a one-past-end pointer on a `[u8; 4096]`, which is defined behaviour; the returned pointer is never dereferenced by `top()` itself — only by `init_context`, whose `# Safety` contract the caller has already accepted.
-- **Rejected alternatives:** Wrapping in `Mutex` adds lock overhead inappropriate for a bare-metal stack. `static mut` exposes the interior unsafely and makes aliasing analysis harder. For `top()` specifically, safe slice indexing (`&self.0[4096..]`) cannot produce a one-past-end raw pointer without materialising a `&mut [u8]`, which would violate ADR-0021 by carrying a live `&mut` into task setup. `UnsafeCell` with manual discipline is the minimal and standard pattern for bare-metal static storage.
+- **Rejected alternatives:** Wrapping in `Mutex` adds lock overhead inappropriate for a bare-metal stack. `static mut` exposes the interior unsafely and makes aliasing analysis harder. `UnsafeCell` with manual discipline is the minimal and standard pattern for bare-metal static storage.
 - **Reviewed by:** @cemililik.
 - **Status:** Active.
+- **Amendment (2026-04-23, commit TBD): scope extended to `TaskStack::top` inner `unsafe` block.** R1 retrospective audit found that `TaskStack::top` materialises `(*self.0.get()).as_mut_ptr().add(4096)` in an `unsafe { }` block that, while part of the same TaskStack pattern this entry covers, was not explicitly cited. The coverage is now made explicit without opening a new audit entry because the operation is the dereferenced-and-offset form of the same `UnsafeCell<[u8; 4096]>` access this entry audits.
+  - **Additional location:** `TaskStack::top` in the same file.
+  - **Additional operation:** `(*self.0.get()).as_mut_ptr().add(4096)` — one-past-end pointer arithmetic to produce the initial stack-pointer value for [`ContextSwitch::init_context`]; the returned pointer is never dereferenced by `top()` itself.
+  - **Additional invariant:** `add(4096)` on a `[u8; 4096]` produces a one-past-end pointer, which is defined behaviour; out-of-bounds dereference responsibility lives with `init_context`'s `# Safety` contract.
+  - **Additional rejected alternative:** safe slice indexing (`&self.0[4096..]`) cannot produce a one-past-end raw pointer without materialising a `&mut [u8]`, which would violate ADR-0021 by carrying a live `&mut` into task setup.
+  - Third task stack (`TASK_IDLE_STACK`) added by T-007 (2026-04-22, commit `25cfaf4`) is also covered by this entry.
 
 ### UNSAFE-2026-0012 — `&mut` aliasing on shared kernel state across cooperative yields
 

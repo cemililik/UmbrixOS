@@ -29,7 +29,11 @@ T-011 bundles these items into a single task so the test-writing discipline land
 ## Acceptance criteria
 
 - [ ] **`IpcError::ReceiverTableFull` test** — set up a `CapabilityTable` filled to capacity, invoke `ipc_recv` against a pending send that carries a `Capability`, assert `Err(ReceiverTableFull)` **and** that the capability remains in the endpoint's `RecvComplete` / `SendPending` state (not silently dropped). Code review §Test coverage bullet 1.
-- [ ] **Slot-reuse with pending transfer cap test** — queue a `SendPending` with `cap: Some(_)` on an endpoint, destroy the endpoint (bumping its generation), allocate a new endpoint that reuses the same slot, confirm `reset_if_stale_generation` detects the generation mismatch **and** that the `debug_assert!` introduced in R1 / 7eaa10a fires when the stale cap would otherwise be silently dropped (i.e. the test confirms the assertion's dev-mode behaviour). Code review §Test coverage bullet 2.
+- [ ] **Slot-reuse with pending transfer cap test** — two tests, paired:
+  1. A `#[cfg(debug_assertions)]` + `#[should_panic(expected = "endpoint slot must be drained")]` test that queues a `SendPending` with `cap: Some(_)` on an endpoint, destroys the endpoint (bumping its generation), allocates a new endpoint at the same slot, and triggers `reset_if_stale_generation`. The test confirms the `debug_assert!` (added by `7eaa10a` at [`kernel/src/ipc/mod.rs`](../../../../kernel/src/ipc/mod.rs) line ~215) fires as designed when an in-flight `Capability` would otherwise be silently dropped.
+  2. A variant **without** `cap: Some(_)` (i.e. `SendPending { cap: None }` or `RecvWaiting`) that is not gated by `#[should_panic]`: the `debug_assert!` must *not* fire because nothing would be leaked. This confirms the assert's predicate is not over-broad.
+
+  Both tests must exercise the actual `reset_if_stale_generation` function by name, not a local copy. The paired form (should-panic + must-not-panic) protects against the assert rotting into a blanket panic or into a no-op. Code review §Test coverage bullet 2.
 - [ ] **`ipc_send_and_yield` three-case bundle**:
   - `Ok(SendOutcome::Delivered)` with a registered receiver → sender's unblock-and-yield path runs; receiver ends up in `Ready`; scheduler state is consistent post-call.
   - `Ok(SendOutcome::Enqueued)` with no receiver → no yield; scheduler state unchanged.
@@ -43,9 +47,9 @@ T-011 bundles these items into a single task so the test-writing discipline land
 ## Out of scope
 
 - Branch coverage for every `cap/table.rs` error return — diminishing returns; five targeted tests is the cap.
-- BSP coverage — T-011 does not touch `bsp-qemu-virt`; BSP-side measurement is a T-009 follow-up.
+- BSP coverage — T-011 does not touch `bsp-qemu-virt`; BSP-side measurement is a follow-up for T-009 (Timer init / perf measurement, [planned under B0](../../../roadmap/phases/phase-b.md), not yet opened).
 - `ResetQueuesCpu` or `FakeCpu` API changes — existing test-harness shapes are sufficient.
-- Performance tests — measurements are T-009 scope.
+- Performance tests — measurements are the scope of T-009 (Timer init / perf measurement, [planned under B0](../../../roadmap/phases/phase-b.md), not yet opened).
 - New ADRs — the code shapes already exist; T-011 only writes tests.
 - Test-hal crate coverage improvements — 95 %+ already; the remaining gaps are no-op stubs.
 

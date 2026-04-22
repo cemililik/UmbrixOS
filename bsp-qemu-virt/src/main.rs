@@ -146,16 +146,13 @@ impl TaskStack {
     ///
     /// The caller must ensure this `TaskStack` outlives every task that uses it.
     unsafe fn top(&self) -> *mut u8 {
-        // SAFETY: `self.0.get()` returns `*mut [u8; 4096]` from the
-        // UnsafeCell; dereferencing it is sound because the caller's
-        // `# Safety` contract says the TaskStack outlives every task using
-        // it, and single-core cooperative scheduling ensures no
-        // concurrent access to the same stack. `add(4096)` is the
-        // one-past-end sentinel — pointer arithmetic, not a dereference
-        // beyond the allocation. Rejected alternatives: safe slice
-        // indexing (`&self.0[4096..]`) cannot produce a one-past-end raw
-        // pointer without materialising a `&mut [u8]`, which would
-        // violate ADR-0021 by carrying a live `&mut` into task setup.
+        // SAFETY: UnsafeCell deref is sound under the caller's
+        // outlives-task contract (see `# Safety`) and single-core
+        // cooperative scheduling; `add(4096)` is a one-past-end
+        // sentinel, not an out-of-bounds dereference. Rejected
+        // alternatives + full rationale live in UNSAFE-2026-0011's
+        // 2026-04-23 Amendment (covers both the Sync marker and
+        // `top()`'s pointer arithmetic under one audit entry).
         // Audit: UNSAFE-2026-0011.
         unsafe { (*self.0.get()).as_mut_ptr().add(4096) }
     }
