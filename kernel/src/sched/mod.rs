@@ -1185,18 +1185,9 @@ mod tests {
         let h0 = task_handle(0);
         let h1 = task_handle(1);
 
-        // Set up the endpoint + cap first (FakeCpu-like setup, inlined
-        // because ResetQueuesCpu is not the same type as FakeCpu).
-        let cpu = ResetQueuesCpu {
-            queues: core::ptr::from_mut(&mut queues),
-        };
-        // SAFETY: 16-byte aligned 512-byte stacks; init_context is a no-op.
-        unsafe {
-            sched.add_task(&cpu, h0, spin_entry(), stack0.top()).unwrap();
-            sched.add_task(&cpu, h1, spin_entry(), stack1.top()).unwrap();
-        }
-        sched.ready.dequeue();
-        sched.current = Some(h0);
+        // Set up the endpoint + cap before taking any raw pointers — the
+        // `&mut ep_arena` and `&mut table` borrows below complete and
+        // drop before we start building the raw-pointer configuration.
         let ep = create_endpoint(&mut ep_arena, Endpoint::new(0)).unwrap();
         // Guard: test correctness depends on the resume-path ipc_recv
         // seeing state == Idle (so it returns Pending). ResetQueuesCpu
@@ -1207,15 +1198,41 @@ mod tests {
         let cap = Capability::new(CapRights::RECV, CapObject::Endpoint(ep));
         let ep_cap = table.insert_root(cap).unwrap();
 
+        // Derive each raw pointer exactly once and reuse. Deriving a
+        // fresh `&mut X` twice on the same referent invalidates the
+        // earlier pointer's Stacked-Borrows tag per Rust's aliasing
+        // model (miri catches this). This is the same discipline
+        // ADR-0021 enforces on the production side — the test has to
+        // honour it too, because `ResetQueuesCpu` caches a pointer to
+        // `queues` that the bridge would otherwise re-borrow.
+        let sched_ptr = core::ptr::from_mut(&mut sched);
+        let ep_arena_ptr = core::ptr::from_mut(&mut ep_arena);
+        let queues_ptr = core::ptr::from_mut(&mut queues);
+        let table_ptr = core::ptr::from_mut(&mut table);
+
+        let cpu = ResetQueuesCpu { queues: queues_ptr };
+        // SAFETY: 16-byte aligned 512-byte stacks; init_context is a no-op.
+        // add_task uses `&mut self` on Scheduler, which temporarily
+        // reborrows through `sched_ptr` — fine because the reborrow
+        // ends before the bridge call below.
+        unsafe {
+            let s = &mut *sched_ptr;
+            s.add_task(&cpu, h0, spin_entry(), stack0.top()).unwrap();
+            s.add_task(&cpu, h1, spin_entry(), stack1.top()).unwrap();
+            s.ready.dequeue();
+            s.current = Some(h0);
+        }
+
         // SAFETY: all four pointers refer to stack-local test state owned
-        // exclusively by this thread; no aliasing.
+        // exclusively by this thread; each was derived exactly once
+        // above, so no tag-invalidating re-borrow happens here.
         let result = unsafe {
             ipc_recv_and_yield(
-                core::ptr::from_mut(&mut sched),
+                sched_ptr,
                 &cpu,
-                core::ptr::from_mut(&mut ep_arena),
-                core::ptr::from_mut(&mut queues),
-                core::ptr::from_mut(&mut table),
+                ep_arena_ptr,
+                queues_ptr,
+                table_ptr,
                 ep_cap,
             )
         };
