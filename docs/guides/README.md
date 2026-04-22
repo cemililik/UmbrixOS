@@ -12,6 +12,7 @@ Tyrne is in the architecture phase. Guides will be added as the corresponding im
 |-------|----------|--------|
 | `toolchain-setup.md` | First-time contributor setting up the Rust cross-compiler and QEMU. | Planned — Phase 3 |
 | [`run-under-qemu.md`](run-under-qemu.md) | Running the kernel under QEMU `virt` aarch64. | Accepted (v0.0.1) |
+| [`ci.md`](ci.md) | What the GitHub Actions pipeline runs, when it runs, and what each job gates. | Accepted (2026-04-23, R6) |
 | `debug-with-gdb.md` | Attaching GDB to a QEMU-hosted kernel. | Planned — Phase 3 |
 | `port-to-new-board.md` | Adding a new board support package to the HAL. | Planned — Phase 4 |
 | `write-a-driver.md` | Implementing a userspace driver with capability grants. | Planned — Phase 4 |
