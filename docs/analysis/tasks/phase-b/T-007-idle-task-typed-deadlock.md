@@ -2,7 +2,7 @@
 
 - **Phase:** B
 - **Milestone:** B0 — Phase A exit hygiene
-- **Status:** In Progress
+- **Status:** In Review
 - **Created:** 2026-04-22
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** [T-006](T-006-raw-pointer-scheduler-api.md) (`In Review`, ADR-0021 Accepted — the raw-pointer bridge shape this task's idle-registration path inherits).
@@ -30,13 +30,13 @@ T-007 lands the implementation: register an idle task during `kernel_entry`, ext
 ## Acceptance criteria
 
 - [x] **ADR-0022 Accepted** (2026-04-22) — idle-as-regular-task + typed `SchedError::Deadlock` + `IpcError::PendingAfterResume`; `start`'s empty-queue panic kept.
-- [ ] **`SchedError::Deadlock` variant added** to `kernel::sched::SchedError` and returned by `ipc_recv_and_yield` in place of the current `panic!("deadlock: …")`.
-- [ ] **`IpcError::PendingAfterResume` variant added** to `kernel::ipc::IpcError` and returned through `SchedError::Ipc(…)` in place of the current release-mode fall-through on the `debug_assert!`.
-- [ ] **BSP idle task registered.** `bsp-qemu-virt/src/main.rs` adds a `fn idle_entry() -> !` that loops `cpu.wait_for_interrupt()` + `sched::yield_now(...)`, a `TASK_IDLE_STACK: TaskStack`, and a `create_task` + `add_task` for idle inside `kernel_entry` *before* `sched::start`. Idle is added first so it is never mistakenly the first-dispatched task (task B still runs first per the existing A6 ordering).
-- [ ] **Tests:** a kernel unit test directly constructs a scheduler, blocks the sole task via `ipc_recv_and_yield` without registering an idle task, and asserts `Err(SchedError::Deadlock)`. A second test covers `IpcError::PendingAfterResume` by simulating a resume where the endpoint state is `Pending` (test-only scaffold — may use a `FakeCpu` that returns instead of switching).
-- [ ] **Tests stay green.** 75 kernel + 34 test-hal = 109 host tests. QEMU smoke reproduces the A6 five-line trace exactly (idle must not print; its presence must be invisible to the demo).
-- [ ] **No new `unsafe`.** ADR-0022 §Consequences/Positive guarantees idle introduces no new `unsafe` pattern; this criterion is the explicit check.
-- [ ] **Documentation:** `ipc_recv_and_yield`'s `# Errors` section documents `SchedError::Deadlock` and `SchedError::Ipc(IpcError::PendingAfterResume)`; `IpcError` doc lists `PendingAfterResume`'s semantics; the scheduler module doc mentions that the BSP registers an idle task.
+- [x] **`SchedError::Deadlock` variant added** to `kernel::sched::SchedError` and returned by `ipc_recv_and_yield` in place of the former `panic!("deadlock: …")`; scheduler state is restored before the return. Commit `029d066`.
+- [x] **`IpcError::PendingAfterResume` variant added** to `kernel::ipc::IpcError` and returned through `SchedError::Ipc(…)` in place of the former release-mode fall-through. The companion `debug_assert!` is removed per the ADR-0022 *Revision notes* second rider — the typed return is the observable contract. Commit `029d066` (variant) / `8110cc5` (assert removal).
+- [x] **BSP idle task registered.** `bsp-qemu-virt/src/main.rs` adds `TASK_IDLE_STACK`, `fn idle_entry() -> !`, and a `create_task` + `add_task` for idle in `kernel_entry` *after* A and B so FIFO dispatch still runs task B first. Idle body is `spin_loop + yield_now` for v1 (WFI deferred to T-009 per ADR-0022 first rider — no IRQ source yet). Commit `25cfaf4`.
+- [x] **Tests:** `ipc_recv_and_yield_returns_deadlock_when_ready_queue_empty` (blocks sole task, asserts `Err(SchedError::Deadlock)`, verifies state restored) and `ipc_recv_and_yield_resume_pending_returns_typed_err` (uses a `ResetQueuesCpu` test-helper to force `Ok(Pending)` resume, asserts typed `Err`). Commit `8110cc5`.
+- [x] **Tests stay green.** 77 kernel + 34 test-hal = 111 host tests (+2 from T-007). QEMU smoke reproduces the A6 five-line trace byte-for-byte.
+- [x] **No new `unsafe` blocks introduced.** Idle reuses the existing `TaskStack` + `fn() -> !` + raw-pointer-bridge patterns; `ResetQueuesCpu`'s `Send`/`Sync` impls are test-only and scoped to the test module.
+- [x] **Documentation:** `ipc_recv_and_yield`'s `# Errors` section documents `SchedError::Deadlock` and `SchedError::Ipc(IpcError::PendingAfterResume)`; `IpcError::PendingAfterResume` and `SchedError::Deadlock` carry inline doc-comments citing ADR-0022; the scheduler module doc gained an *Idle task* section. `idle_entry` documents the WFI deferral.
 
 ## Out of scope
 
@@ -69,15 +69,15 @@ Settled in ADR-0022 §Decision outcome. At sketch level, in commit order:
 
 ## Definition of done
 
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo host-clippy` clean with `-D warnings`.
-- [ ] `cargo kernel-clippy` clean.
-- [ ] `cargo host-test` passes (at least 77 kernel + 34 test-hal = 111 host tests — +2 from the new scheduler tests).
-- [ ] `cargo kernel-build` clean; QEMU smoke reproduces the A6 trace unchanged (idle is invisible).
-- [ ] ADR-0022 Accepted before the implementation commit (2026-04-22, commit `7fb74bb` + this task's opening commit).
-- [ ] No new `unsafe` blocks introduced — no audit-log changes required.
-- [ ] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0022` trailers.
-- [ ] Task status updated to `In Review`; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated.
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo host-clippy` clean with `-D warnings`.
+- [x] `cargo kernel-clippy` clean.
+- [x] `cargo host-test` passes — 77 kernel + 34 test-hal = 111 host tests (+2 from T-007).
+- [x] `cargo kernel-build` clean; QEMU smoke reproduces the A6 five-line trace unchanged.
+- [x] ADR-0022 Accepted before the implementation commit (2026-04-22, commit `2895360` accepted via the T-007 opening commit).
+- [x] No new `unsafe` blocks introduced — no audit-log changes required.
+- [x] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0022` trailers.
+- [x] Task status updated to `In Review`; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated.
 
 ## Design notes
 
@@ -109,3 +109,4 @@ Settled in ADR-0022 §Decision outcome. At sketch level, in commit order:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-22 | @cemililik (+ Claude Opus 4.7 agent) | opened; status `In Progress`. ADR-0022 Accepted earlier today (commit `7fb74bb`). Implementation cleared to begin: `IpcError::PendingAfterResume` + `SchedError::Deadlock` variants → `ipc_recv_and_yield` rewire → BSP idle registration → two new host tests. Current.md pointed at T-007; T-006 moves off `Active task`, remains `In Review` pending maintainer promotion. |
+| 2026-04-22 | @cemililik (+ Claude Opus 4.7 agent) | Implementation complete. Four commits landed: `029d066` (typed error variants + `ipc_recv_and_yield` rewire with state restore), `25cfaf4` (BSP idle task registration; WFI deferred to T-009 per ADR-0022 first rider after QEMU hang reproduced empirically), `8110cc5` (two new host tests + resume-path `debug_assert!` dropped as redundant with typed error; ADR-0022 gains a second rider documenting the decision). 77 kernel + 34 test-hal = 111 host tests green; QEMU smoke matches A6 byte-for-byte; fmt/clippy all clean. Status → `In Review`. T-006 mini-retro's "post-In-Review second-read" gate applies before promoting to `Done`. |

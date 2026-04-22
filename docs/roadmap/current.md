@@ -5,9 +5,11 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 ---
 
 - **Active phase:** B — opened 2026-04-21. First milestone B0 in progress.
-- **Active milestone:** B0 — Phase A exit hygiene. T-006 is in review; T-007 is in progress; T-008..T-011 remain to open.
-- **Active task:** [T-007 — Idle task + typed `SchedError::Deadlock` + resume-path hardening](../analysis/tasks/phase-b/T-007-idle-task-typed-deadlock.md) — `In Progress` since 2026-04-22. Implements ADR-0022 (Accepted 2026-04-22).
-- **Prior active task:** [T-006 — Raw-pointer scheduler API refactor](../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — `In Review` since 2026-04-22; awaiting maintainer sign-off to promote to `Done`.
+- **Active milestone:** B0 — Phase A exit hygiene. T-006 and T-007 are in review; T-008..T-011 remain to open.
+- **Active task:** None — T-007 moved to `In Review` 2026-04-22; next task (T-008 / T-009 / T-011) to be opened.
+- **In review:**
+  - [T-006 — Raw-pointer scheduler API refactor](../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — `In Review` since 2026-04-22.
+  - [T-007 — Idle task + typed `SchedError::Deadlock` + resume-path hardening](../analysis/tasks/phase-b/T-007-idle-task-typed-deadlock.md) — `In Review` since 2026-04-22; implements ADR-0022.
 - **Working branch:** `development`.
 - **Last completed milestone:** A6 — Two-task IPC demo, 2026-04-21. **Phase A exit bar met.**
 - **Last completed task:** [T-005 — Two-task IPC demo](../analysis/tasks/phase-a/T-005-two-task-ipc-demo.md) — `Done` 2026-04-21.
