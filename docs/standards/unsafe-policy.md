@@ -1,6 +1,6 @@
 # `unsafe` policy
 
-`unsafe` is Rust's escape hatch. It is also the place where all memory-safety guarantees are negotiated away. In Umbrix's security-first posture, `unsafe` is a feature we use — because kernels must — but one we account for explicitly.
+`unsafe` is Rust's escape hatch. It is also the place where all memory-safety guarantees are negotiated away. In Tyrne's security-first posture, `unsafe` is a feature we use — because kernels must — but one we account for explicitly.
 
 This standard governs every appearance of the `unsafe` keyword in the repository.
 
@@ -68,7 +68,12 @@ An audit log file (`docs/audits/unsafe-log.md`, created when the first kernel co
 - Who reviewed the introduction (maintainer + any second reviewer if security-sensitive).
 - Date introduced. If removed: date removed and the replacement.
 
-The audit log is append-only. Removing an `unsafe` block flips its status to `Removed` with a removal date and commit; it does not delete the entry. `cargo-geiger` output is periodically reconciled against the log.
+The audit log is **append-only**. The original body of an entry (fields written when the entry was introduced) must not be rewritten once committed. Two forms of post-hoc update are permitted because both preserve history rather than overwrite it:
+
+- **Status change.** Removing an `unsafe` block flips the entry's status to `Removed` with a removal date and commit; the original body stays on record. An explanatory rider may follow the `Status:` line.
+- **Amendment.** When an entry's scope expands to cover an additional call site or operation under the same safety argument, a dated **`Amendment (YYYY-MM-DD, commit SHA): <short title>.`** block is appended to the entry's end. The block restates the additional location / operation / invariants / rejected alternatives; the entry's original fields are left intact. See UNSAFE-2026-0011 for the canonical example.
+
+`cargo-geiger` output is periodically reconciled against the log. In-place editing of an entry's original body is a policy violation; reviewers should reject PRs that rewrite rather than amend.
 
 ### 4. `unsafe impl` and `unsafe trait` follow the same discipline
 

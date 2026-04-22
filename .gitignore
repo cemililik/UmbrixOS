@@ -50,3 +50,9 @@ docs/analysis/technical-analysis/
 
 # Local-only transient workbooks (follow-up ledgers, drafts, scratch notes)
 docs/analysis/temp/
+
+# Coverage raw artefacts — summary reports are committed under
+# docs/analysis/reports/, but raw lcov/profraw dumps are not (they change
+# on every run and bloat diffs).
+*.profraw
+docs/analysis/reports/lcov-*.info

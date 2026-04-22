@@ -1,0 +1,166 @@
+# Tyrne CI — gate for every push and pull request.
+#
+# Goal: every hygiene check that a contributor is expected to pass
+# locally before opening a PR is also enforced here. A red CI blocks
+# merge. The Miri and coverage jobs are slower and run conditionally
+# to keep median PR feedback tight; they are still required for merge
+# into `main`.
+#
+# When this pipeline was born (2026-04-23, R6 retrospective work) the
+# local host-test count was 111; the kernel-build target was
+# aarch64-unknown-none. Any time a new crate or target lands, update
+# the job matrix below.
+
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+# Cancel in-progress runs for the same branch — we only care about
+# the latest commit's verdict, not intermediate ones.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Pinned nightly for miri + coverage jobs. Rolling nightly means a
+  # miri/llvm-tools regression on the public channel breaks master
+  # without any commit of ours being the cause. Update this pin
+  # intentionally (open an issue citing the pin bump), not silently.
+  # When bumping, also refresh docs/guides/ci.md's "Nightly pinning"
+  # section. Last bumped: 2026-04-23 (initial pin).
+  NIGHTLY_PIN: nightly-2026-01-15
+
+jobs:
+  # ─── Fast lane: lint + host tests on stable ─────────────────────────────
+  # Expected wall time: ~2 min. Every PR must pass this before anything
+  # else runs.
+  lint-and-host-test:
+    name: fmt + clippy + host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable with rustfmt + clippy
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo host-clippy
+        run: cargo host-clippy
+      - name: cargo host-test
+        run: cargo host-test
+
+  # ─── Kernel build: aarch64-unknown-none ─────────────────────────────────
+  # The bare-metal BSP cannot be built as part of the default workspace
+  # test target (no_std + no_main). Build it explicitly here so the
+  # kernel ELF and its dependencies stay compilable.
+  kernel-build:
+    name: aarch64-unknown-none kernel build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable + aarch64 target
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add aarch64-unknown-none
+          rustup component add clippy
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-aarch64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-aarch64-
+      - name: cargo kernel-build
+        run: cargo kernel-build
+      - name: cargo kernel-clippy
+        run: cargo kernel-clippy
+
+  # ─── Miri: aliasing validation ──────────────────────────────────────────
+  # Runs the full host-test suite under Miri's Stacked Borrows checker
+  # (see ADR-0021 / UNSAFE-2026-0014). Slower than the fast lane
+  # (~10–15 min) and requires nightly, so it runs as its own job. A
+  # Miri regression is a hard stop.
+  miri:
+    name: miri (Stacked Borrows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned nightly with miri
+        run: |
+          rustup toolchain install $NIGHTLY_PIN --component miri --no-self-update
+          rustup override set $NIGHTLY_PIN
+      - name: Cache cargo registry and miri target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-miri-${{ env.NIGHTLY_PIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-miri-${{ env.NIGHTLY_PIN }}-
+      - name: cargo miri setup
+        run: cargo +$NIGHTLY_PIN miri setup
+      - name: cargo miri test (excl. BSP)
+        run: cargo +$NIGHTLY_PIN miri test --workspace --exclude tyrne-bsp-qemu-virt
+
+  # ─── Coverage: informational ────────────────────────────────────────────
+  # Produces an lcov report. Does NOT fail on a coverage drop today
+  # (no agreed floor yet); it exists to make trends visible. When the
+  # workspace settles around its post-T-011 shape, flip this job to
+  # enforce a floor (≥ 94 % regions or similar).
+  coverage:
+    name: coverage (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned nightly with llvm-tools
+        run: |
+          rustup toolchain install $NIGHTLY_PIN --component llvm-tools-preview --no-self-update
+          rustup override set $NIGHTLY_PIN
+      - name: Cache cargo registry, bin (cargo-llvm-cov), and llvm-cov target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-llvmcov-${{ env.NIGHTLY_PIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-llvmcov-${{ env.NIGHTLY_PIN }}-
+      - name: Install cargo-llvm-cov (cached)
+        run: |
+          # `cargo install --locked cargo-llvm-cov` is idempotent: if the
+          # pinned version is already in ~/.cargo/bin from the cache
+          # restore above, this is a no-op (~1 s) instead of a 1-2 min
+          # rebuild.
+          cargo install --locked cargo-llvm-cov
+      - name: cargo llvm-cov --summary-only
+        run: cargo llvm-cov --workspace --exclude tyrne-bsp-qemu-virt --summary-only
