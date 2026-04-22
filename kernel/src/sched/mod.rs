@@ -683,16 +683,13 @@ pub unsafe fn ipc_recv_and_yield<C: ContextSwitch + Cpu>(
         ipc_recv(arena_ref, queues_ref, ep_cap, table_ref)
     };
 
-    // A second `Pending` result is a scheduler bug — the sender should have
-    // queued a message before unblocking this task. The debug_assert fires
-    // loudly in test/debug builds; release builds propagate the typed
-    // IpcError::PendingAfterResume via SchedError::Ipc per ADR-0022 so a
-    // stripped assert never silently decays into a caller-side panic.
-    debug_assert!(
-        !matches!(result, Ok(RecvOutcome::Pending)),
-        "ipc_recv returned Pending after context-switch resume — \
-         sender must deliver before unblocking receiver"
-    );
+    // A second `Pending` result is a scheduler bug — the sender should
+    // have delivered before unblocking this task. Per ADR-0022 the bridge
+    // returns `Err(SchedError::Ipc(IpcError::PendingAfterResume))` in this
+    // case; the typed return *is* the loud signal (unhandled, it surfaces
+    // at the caller's error path and carries the bridge's context), so a
+    // redundant `debug_assert!` that made the condition untestable is not
+    // kept.
     match result {
         Ok(RecvOutcome::Pending) => Err(SchedError::Ipc(IpcError::PendingAfterResume)),
         Ok(outcome) => Ok(outcome),
@@ -938,5 +935,190 @@ mod tests {
         assert_ne!(TaskState::Ready, TaskState::Blocked { on: ep });
         assert_ne!(TaskState::Idle, TaskState::Blocked { on: ep });
         assert_eq!(TaskState::Blocked { on: ep }, TaskState::Blocked { on: ep });
+    }
+
+    // ── ADR-0022 typed-error tests (T-007) ───────────────────────────────────
+
+    use crate::cap::{CapRights, Capability};
+    use crate::obj::endpoint::{create_endpoint, Endpoint};
+
+    /// Helpers shared by the two ADR-0022 tests.
+    fn setup_single_task_with_recv_cap(
+        sched: &mut Scheduler<FakeCpu>,
+        ep_arena: &mut EndpointArena,
+        table: &mut CapabilityTable,
+        task: TaskHandle,
+        stack: &mut AlignedStack<512>,
+    ) -> CapHandle {
+        let cpu = FakeCpu;
+        // SAFETY: 16-byte aligned, 512-byte stack; FakeCpu::init_context is
+        // a no-op — stack is never actually used.
+        unsafe {
+            sched.add_task(&cpu, task, spin_entry(), stack.top()).unwrap();
+        }
+        // Simulate `start` having dispatched `task`: it was dequeued and is
+        // now the running task.
+        sched.ready.dequeue();
+        sched.current = Some(task);
+
+        let ep = create_endpoint(ep_arena, Endpoint::new(0)).unwrap();
+        let cap = Capability::new(CapRights::RECV, CapObject::Endpoint(ep));
+        table.insert_root(cap).unwrap()
+    }
+
+    #[test]
+    fn ipc_recv_and_yield_returns_deadlock_when_ready_queue_empty() {
+        // T-007 / ADR-0022: without an idle task, blocking the sole ready
+        // task on IPC must return Err(SchedError::Deadlock) — not panic —
+        // and the scheduler state must be restored to its pre-call shape.
+        let cpu = FakeCpu;
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let mut table = CapabilityTable::new();
+        let mut stack = AlignedStack::<512>::new();
+        let task = task_handle(0);
+
+        let ep_cap = setup_single_task_with_recv_cap(
+            &mut sched, &mut ep_arena, &mut table, task, &mut stack,
+        );
+
+        // Snapshot pre-call state.
+        let prior_current = sched.current;
+        let prior_state = sched.task_states[0];
+        assert_eq!(prior_current, Some(task));
+        assert_eq!(prior_state, TaskState::Ready);
+
+        // SAFETY: all four pointers refer to stack-local test state owned
+        // exclusively by this thread; no aliasing. FakeCpu::context_switch
+        // is a no-op marker; the deadlock path returns before reaching it.
+        let result = unsafe {
+            ipc_recv_and_yield(
+                core::ptr::from_mut(&mut sched),
+                &cpu,
+                core::ptr::from_mut(&mut ep_arena),
+                core::ptr::from_mut(&mut queues),
+                core::ptr::from_mut(&mut table),
+                ep_cap,
+            )
+        };
+
+        assert!(
+            matches!(result, Err(SchedError::Deadlock)),
+            "expected Err(Deadlock), got {result:?}"
+        );
+        // Scheduler state must be restored.
+        assert_eq!(sched.current, prior_current);
+        assert_eq!(sched.task_states[0], prior_state);
+        assert!(sched.ready.is_empty());
+    }
+
+    /// `FakeCpu` variant that resets the `IpcQueues` state to `Idle` during
+    /// `context_switch`, simulating the pathological "resumed without a
+    /// delivery" scenario that `SchedError::Ipc(IpcError::PendingAfterResume)`
+    /// is designed to catch.
+    struct ResetQueuesCpu {
+        queues: *mut IpcQueues,
+    }
+    // SAFETY: test-only; the pointer refers to a stack-local IpcQueues the
+    // test thread exclusively owns. No cross-thread sharing.
+    unsafe impl Send for ResetQueuesCpu {}
+    // SAFETY: same reasoning as Send.
+    unsafe impl Sync for ResetQueuesCpu {}
+
+    impl Cpu for ResetQueuesCpu {
+        fn current_core_id(&self) -> umbrix_hal::CoreId {
+            0
+        }
+        fn disable_irqs(&self) -> umbrix_hal::IrqState {
+            umbrix_hal::IrqState(0)
+        }
+        fn restore_irq_state(&self, _: umbrix_hal::IrqState) {}
+        fn wait_for_interrupt(&self) {}
+        fn instruction_barrier(&self) {}
+    }
+
+    impl ContextSwitch for ResetQueuesCpu {
+        type TaskContext = FakeCtx;
+        unsafe fn context_switch(
+            &self,
+            current: &mut Self::TaskContext,
+            _next: &Self::TaskContext,
+        ) {
+            current.switched = true;
+            // Reset all endpoint states to Idle so the resume-path
+            // ipc_recv observes Pending (RecvWaiting would yield QueueFull
+            // instead, which is covered by the existing IPC tests).
+            // SAFETY: `queues` is valid per the test's construction and
+            // not concurrently accessed.
+            unsafe {
+                let q = &mut *self.queues;
+                *q = IpcQueues::new();
+            }
+        }
+
+        unsafe fn init_context(
+            &self,
+            _ctx: &mut Self::TaskContext,
+            _entry: fn() -> !,
+            _stack_top: *mut u8,
+        ) {
+        }
+    }
+
+    #[test]
+    fn ipc_recv_and_yield_resume_pending_returns_typed_err() {
+        // T-007 / ADR-0022: if the resume-path ipc_recv observes Pending
+        // after the cooperative switch, the bridge must return
+        // Err(SchedError::Ipc(IpcError::PendingAfterResume)) instead of
+        // letting Ok(Pending) propagate — where the caller's
+        // `let RecvOutcome::Received { … } else panic!` would turn it into
+        // a downstream panic. `ResetQueuesCpu` forces the pathological
+        // state by zeroing the queues during context_switch.
+        let mut sched: Scheduler<ResetQueuesCpu> = Scheduler::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let mut table = CapabilityTable::new();
+        let mut stack0 = AlignedStack::<512>::new();
+        let mut stack1 = AlignedStack::<512>::new();
+        let h0 = task_handle(0);
+        let h1 = task_handle(1);
+
+        // Set up the endpoint + cap first (FakeCpu-like setup, inlined
+        // because ResetQueuesCpu is not the same type as FakeCpu).
+        let cpu = ResetQueuesCpu {
+            queues: core::ptr::from_mut(&mut queues),
+        };
+        // SAFETY: 16-byte aligned 512-byte stacks; init_context is a no-op.
+        unsafe {
+            sched.add_task(&cpu, h0, spin_entry(), stack0.top()).unwrap();
+            sched.add_task(&cpu, h1, spin_entry(), stack1.top()).unwrap();
+        }
+        sched.ready.dequeue();
+        sched.current = Some(h0);
+        let ep = create_endpoint(&mut ep_arena, Endpoint::new(0)).unwrap();
+        let cap = Capability::new(CapRights::RECV, CapObject::Endpoint(ep));
+        let ep_cap = table.insert_root(cap).unwrap();
+
+        // SAFETY: all four pointers refer to stack-local test state owned
+        // exclusively by this thread; no aliasing.
+        let result = unsafe {
+            ipc_recv_and_yield(
+                core::ptr::from_mut(&mut sched),
+                &cpu,
+                core::ptr::from_mut(&mut ep_arena),
+                core::ptr::from_mut(&mut queues),
+                core::ptr::from_mut(&mut table),
+                ep_cap,
+            )
+        };
+
+        assert!(
+            matches!(
+                result,
+                Err(SchedError::Ipc(IpcError::PendingAfterResume))
+            ),
+            "expected Err(Ipc(PendingAfterResume)), got {result:?}"
+        );
     }
 }
