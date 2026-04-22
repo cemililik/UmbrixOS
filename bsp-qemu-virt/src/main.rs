@@ -36,7 +36,7 @@ use umbrix_kernel::cap::{CapHandle, CapObject, CapRights, Capability, Capability
 use umbrix_kernel::ipc::{IpcQueues, Message, RecvOutcome};
 use umbrix_kernel::obj::endpoint::{create_endpoint, Endpoint, EndpointArena};
 use umbrix_kernel::obj::task::{create_task, Task, TaskArena};
-use umbrix_kernel::sched::Scheduler;
+use umbrix_kernel::sched::{ipc_recv_and_yield, ipc_send_and_yield, start, yield_now, Scheduler};
 
 mod console;
 mod cpu;
@@ -82,6 +82,37 @@ impl<T> StaticCell<T> {
     const fn new() -> Self {
         Self(UnsafeCell::new(MaybeUninit::uninit()))
     }
+
+    /// Return a raw `*mut T` pointer to the cell's storage without
+    /// materialising a `&mut` to the underlying `MaybeUninit<T>`.
+    ///
+    /// Used by the raw-pointer scheduler bridge per [ADR-0021]: the BSP
+    /// hands `*mut T` to the kernel's `ipc_send_and_yield` /
+    /// `ipc_recv_and_yield` / `yield_now` entry points so that no `&mut`
+    /// reference to any shared kernel state is alive across
+    /// `cpu.context_switch`.
+    ///
+    /// The implementation is a plain pointer cast (`UnsafeCell::get()`
+    /// returns `*mut MaybeUninit<T>`, then `cast::<T>` is a zero-cost
+    /// reinterpretation permitted because `MaybeUninit<T>` shares `T`'s
+    /// layout), so no borrow of any kind is produced here.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the cell has been initialised via a prior
+    /// `(*cell.0.get()).write(...)` before dereferencing the returned pointer,
+    /// and must not use the pointer to create a `&mut T` that outlives a
+    /// cooperative context switch (ADR-0021). Audit: UNSAFE-2026-0013.
+    ///
+    /// [ADR-0021]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0021-raw-pointer-scheduler-ipc-bridge.md
+    #[inline]
+    #[allow(
+        clippy::mut_from_ref,
+        reason = "returns a raw pointer, not a reference; aliasing discipline documented in ADR-0021"
+    )]
+    const fn as_mut_ptr(&self) -> *mut T {
+        self.0.get().cast::<T>()
+    }
 }
 
 // ─── Task-stack storage ───────────────────────────────────────────────────────
@@ -125,6 +156,11 @@ impl TaskStack {
 static TASK_A_STACK: TaskStack = TaskStack::new();
 /// Stack for task B.
 static TASK_B_STACK: TaskStack = TaskStack::new();
+/// Stack for the kernel idle task (ADR-0022). Sized the same as application
+/// task stacks — the idle loop's `wfi` + `yield_now` path uses far less than
+/// 4 KiB, but keeping a uniform `TaskStack` avoids a second static type just
+/// for the idle path.
+static TASK_IDLE_STACK: TaskStack = TaskStack::new();
 
 // ─── Global kernel state ──────────────────────────────────────────────────────
 
@@ -157,6 +193,59 @@ static EP_CAP_A: StaticCell<CapHandle> = StaticCell::new();
 /// Task B's endpoint capability handle (index into `TABLE_B`).
 static EP_CAP_B: StaticCell<CapHandle> = StaticCell::new();
 
+/// Task kernel-object arena — global per [ADR-0016]. Although the v1 demo
+/// never reads this arena after `create_task` has returned the two
+/// `TaskHandle`s, global storage is the uniform pattern established by
+/// ADR-0016 for every kernel-object kind. Keeping `TaskArena` here (and
+/// not on `kernel_entry`'s stack) avoids a second BSP static-cell churn
+/// when task destruction / status-query APIs arrive in later Phase B work.
+///
+/// [ADR-0016]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0016-kernel-object-storage.md
+static TASK_ARENA: StaticCell<TaskArena> = StaticCell::new();
+
+// ─── Idle task ────────────────────────────────────────────────────────────────
+
+/// Kernel idle task — runs when no application task is ready.
+///
+/// Per [ADR-0022], the BSP owns the idle entry. The loop is a
+/// `spin_loop` + `yield_now` — **not** `wfi` + `yield_now` — until a
+/// timer IRQ source lands (T-009). In the v1 workload there is no IRQ
+/// configured; a `wfi` here would suspend the core indefinitely the first
+/// time FIFO scheduling dispatches idle between two ready application
+/// tasks, hanging the demo. The spin-yield form keeps the kernel live and
+/// the demo's cooperative-round-trip trace intact, at the cost of one
+/// extra context switch per inter-task yield when idle happens to sit at
+/// the head of the ready queue. ADR-0022 *Revision notes* records this
+/// adjustment.
+///
+/// When T-009 wires a timer IRQ (and a fallback wake source is guaranteed),
+/// this loop's body becomes `cpu.wait_for_interrupt(); yield_now(...)`.
+/// The shape of the function and its registration path stay the same.
+///
+/// Full IPC-graph deadlock (every task blocked + no IRQ source) is
+/// visible today as "idle spin-yielding forever", not a panic — the
+/// kernel stays live; typed `SchedError::Deadlock` is reachable only if
+/// the BSP did not register idle at all.
+///
+/// [ADR-0022]: https://github.com/cemililik/UmbrixOS/blob/main/docs/decisions/0022-idle-task-and-typed-scheduler-deadlock.md
+fn idle_entry() -> ! {
+    // SAFETY: CPU is fully initialised in `kernel_entry` before `start()`;
+    // single-core cooperative scheduling prevents concurrent access.
+    // Audit: UNSAFE-2026-0010.
+    let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
+    loop {
+        core::hint::spin_loop();
+        // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer
+        // cast (UNSAFE-2026-0013); idle's stack frame holds no `&mut` to
+        // any shared state across the cooperative switch. `yield_now`
+        // can only return `Err(NoCurrentTask)`, which is impossible once
+        // the scheduler has started. Audit: UNSAFE-2026-0014.
+        unsafe {
+            yield_now(SCHED.as_mut_ptr(), cpu).expect("idle: yield_now failed");
+        }
+    }
+}
+
 // ─── Task B ───────────────────────────────────────────────────────────────────
 
 /// IPC demo — receiver side. Registers as receiver on the endpoint, waits for
@@ -176,36 +265,26 @@ fn task_b() -> ! {
     // Register as receiver on the endpoint. If no sender is ready, blocks and
     // yields to Task A. Resumes when Task A delivers a message.
     //
-    // SAFETY (aliasing): `assume_init_mut` on SCHED, EP_ARENA, IPC_QUEUES, and
-    // TABLE_B creates `&mut` references that are alive across the cooperative
-    // context switch inside `ipc_recv_and_yield`. When Task A runs during the
-    // suspension, it creates its own `&mut` references to SCHED, EP_ARENA, and
-    // IPC_QUEUES from the same UnsafeCells — technically aliasing mutable
-    // references. This is safe under the single-core cooperative invariant
-    // (no two tasks execute simultaneously): the suspended task's stack frame
-    // does not access any of these references after the context switch
-    // returns, and the compiler cannot observe the aliasing across the
-    // assembly context-switch barrier.
-    // Rejected alternatives: a raw-pointer scheduler API would remove the
-    // aliasing entirely, but the v1 scheduler bridge signatures take `&mut`
-    // across the suspension point — switching to raw pointers requires
-    // reshaping `Scheduler::ipc_recv_and_yield` and is scheduled as a
-    // Phase B refactor (see UNSAFE-2026-0012 status). A Mutex<Scheduler> or
-    // similar runtime lock would defer rather than eliminate the unsafety
-    // and pay lock overhead for a kernel that has no blocking primitive yet.
-    // SAFETY: see aliasing and rejected-alternatives notes above.
-    // Audit: UNSAFE-2026-0012.
+    // SAFETY: per ADR-0021 — every `*mut` here is produced by
+    // `StaticCell::as_mut_ptr()`, which is a pure pointer cast and never
+    // materialises a `&mut`. `ipc_recv_and_yield` itself takes raw pointers
+    // and only creates momentary `&mut`s strictly outside its
+    // `cpu.context_switch` window (per the scheduler module's shared safety
+    // contract). The four statics (`SCHED`, `EP_ARENA`, `IPC_QUEUES`,
+    // `TABLE_B`) refer to distinct referents. `CPU` is accessed via `&`, an
+    // immutable borrow which is always aliasing-safe. No `&mut` in this
+    // task's stack frame crosses the cooperative switch — this is the
+    // pattern that retires UNSAFE-2026-0012. Audit: UNSAFE-2026-0014.
     let recv_outcome = unsafe {
-        (*SCHED.0.get())
-            .assume_init_mut()
-            .ipc_recv_and_yield(
-                (*CPU.0.get()).assume_init_ref(),
-                (*EP_ARENA.0.get()).assume_init_mut(),
-                (*IPC_QUEUES.0.get()).assume_init_mut(),
-                (*TABLE_B.0.get()).assume_init_mut(),
-                *(*EP_CAP_B.0.get()).assume_init_ref(),
-            )
-            .expect("task B: ipc_recv failed")
+        ipc_recv_and_yield(
+            SCHED.as_mut_ptr(),
+            (*CPU.0.get()).assume_init_ref(),
+            EP_ARENA.as_mut_ptr(),
+            IPC_QUEUES.as_mut_ptr(),
+            TABLE_B.as_mut_ptr(),
+            *(*EP_CAP_B.0.get()).assume_init_ref(),
+        )
+        .expect("task B: ipc_recv failed")
     };
 
     let RecvOutcome::Received { msg, .. } = recv_outcome else {
@@ -228,33 +307,29 @@ fn task_b() -> ! {
         label: 0xBBBB,
         params: [0; 3],
     };
-    // SAFETY: same aliasing invariants and rejected alternatives as the
-    // ipc_recv_and_yield call above; raw-pointer refactor deferred to
-    // Phase B, Mutex rejected for same reasons.
-    // Audit: UNSAFE-2026-0012.
+    // SAFETY: per ADR-0021 — same raw-pointer discipline as the
+    // `ipc_recv_and_yield` call above. `yield_now` follows the same shared
+    // safety contract — caller-side never materialises a `&mut` across the
+    // switch. Audit: UNSAFE-2026-0014.
     unsafe {
-        (*SCHED.0.get())
-            .assume_init_mut()
-            .ipc_send_and_yield(
-                (*CPU.0.get()).assume_init_ref(),
-                (*EP_ARENA.0.get()).assume_init_mut(),
-                (*IPC_QUEUES.0.get()).assume_init_mut(),
-                (*TABLE_B.0.get()).assume_init_mut(),
-                *(*EP_CAP_B.0.get()).assume_init_ref(),
-                reply,
-                None,
-            )
-            .expect("task B: ipc_send reply failed");
+        ipc_send_and_yield(
+            SCHED.as_mut_ptr(),
+            (*CPU.0.get()).assume_init_ref(),
+            EP_ARENA.as_mut_ptr(),
+            IPC_QUEUES.as_mut_ptr(),
+            TABLE_B.as_mut_ptr(),
+            *(*EP_CAP_B.0.get()).assume_init_ref(),
+            reply,
+            None,
+        )
+        .expect("task B: ipc_send reply failed");
 
         // Yield explicitly so Task A can receive the reply that was just queued
         // as SendPending. Without this yield, A's ipc_recv_and_yield would never
         // run (cooperative scheduling; B never blocks again after the send).
         // `yield_now` only errors with `NoCurrentTask`, which cannot happen
-        // once the scheduler has started — using `.expect` keeps error handling
-        // consistent with the surrounding IPC calls.
-        (*SCHED.0.get())
-            .assume_init_mut()
-            .yield_now((*CPU.0.get()).assume_init_ref())
+        // once the scheduler has started.
+        yield_now(SCHED.as_mut_ptr(), (*CPU.0.get()).assume_init_ref())
             .expect("task B: yield_now after reply failed");
     }
 
@@ -288,42 +363,38 @@ fn task_a() -> ! {
     // called ipc_recv_and_yield and is in RecvWaiting state. The send delivers
     // immediately (Delivered) and ipc_send_and_yield yields to B.
     //
-    // SAFETY: same aliasing invariants and rejected alternatives as task_b
-    // (raw-pointer refactor deferred to Phase B; Mutex rejected).
-    // Audit: UNSAFE-2026-0012.
+    // SAFETY: per ADR-0021 — same raw-pointer discipline as task_b.
+    // Audit: UNSAFE-2026-0014.
     unsafe {
-        (*SCHED.0.get())
-            .assume_init_mut()
-            .ipc_send_and_yield(
-                (*CPU.0.get()).assume_init_ref(),
-                (*EP_ARENA.0.get()).assume_init_mut(),
-                (*IPC_QUEUES.0.get()).assume_init_mut(),
-                (*TABLE_A.0.get()).assume_init_mut(),
-                *(*EP_CAP_A.0.get()).assume_init_ref(),
-                msg,
-                None,
-            )
-            .expect("task A: ipc_send failed");
+        ipc_send_and_yield(
+            SCHED.as_mut_ptr(),
+            (*CPU.0.get()).assume_init_ref(),
+            EP_ARENA.as_mut_ptr(),
+            IPC_QUEUES.as_mut_ptr(),
+            TABLE_A.as_mut_ptr(),
+            *(*EP_CAP_A.0.get()).assume_init_ref(),
+            msg,
+            None,
+        )
+        .expect("task A: ipc_send failed");
     }
 
     // Task A resumes here after B delivered the reply. The endpoint is now in
     // SendPending (B's reply). Calling ipc_recv_and_yield collects it immediately
     // without blocking (SendPending → Received → Idle).
     //
-    // SAFETY: same aliasing invariants and rejected alternatives as task_b's
-    // ipc_recv_and_yield call (raw-pointer refactor deferred to Phase B;
-    // Mutex rejected). Audit: UNSAFE-2026-0012.
+    // SAFETY: per ADR-0021 — same raw-pointer discipline as task_b's
+    // ipc_recv_and_yield call. Audit: UNSAFE-2026-0014.
     let reply_outcome = unsafe {
-        (*SCHED.0.get())
-            .assume_init_mut()
-            .ipc_recv_and_yield(
-                (*CPU.0.get()).assume_init_ref(),
-                (*EP_ARENA.0.get()).assume_init_mut(),
-                (*IPC_QUEUES.0.get()).assume_init_mut(),
-                (*TABLE_A.0.get()).assume_init_mut(),
-                *(*EP_CAP_A.0.get()).assume_init_ref(),
-            )
-            .expect("task A: ipc_recv (reply) failed")
+        ipc_recv_and_yield(
+            SCHED.as_mut_ptr(),
+            (*CPU.0.get()).assume_init_ref(),
+            EP_ARENA.as_mut_ptr(),
+            IPC_QUEUES.as_mut_ptr(),
+            TABLE_A.as_mut_ptr(),
+            *(*EP_CAP_A.0.get()).assume_init_ref(),
+        )
+        .expect("task A: ipc_recv (reply) failed")
     };
 
     let RecvOutcome::Received { msg: reply, .. } = reply_outcome else {
@@ -389,9 +460,23 @@ pub extern "C" fn kernel_entry() -> ! {
 
     // ── Kernel-object setup ───────────────────────────────────────────────────
 
-    let mut arena = TaskArena::default();
-    let handle_a = create_task(&mut arena, Task::new(0)).expect("create_task A failed");
-    let handle_b = create_task(&mut arena, Task::new(1)).expect("create_task B failed");
+    // Publish the Task arena before any `create_task` call — subsequent
+    // access is via raw pointer per the ADR-0021 discipline, even though
+    // the arena sees no post-setup use in the v1 demo.
+    // SAFETY: single-core; no task is running yet. Audit: UNSAFE-2026-0001.
+    unsafe {
+        (*TASK_ARENA.0.get()).write(TaskArena::default());
+    }
+    // SAFETY: `TASK_ARENA` was just written above; momentary `&mut` is
+    // scoped to these three `create_task` calls and drops before any task
+    // runs. Audit: UNSAFE-2026-0014.
+    let (handle_a, handle_b, handle_idle) = unsafe {
+        let arena = &mut *TASK_ARENA.as_mut_ptr();
+        let ha = create_task(arena, Task::new(0)).expect("create_task A failed");
+        let hb = create_task(arena, Task::new(1)).expect("create_task B failed");
+        let hi = create_task(arena, Task::new(2)).expect("create_task idle failed");
+        (ha, hb, hi)
+    };
 
     // ── IPC infrastructure ────────────────────────────────────────────────────
 
@@ -437,6 +522,8 @@ pub extern "C" fn kernel_entry() -> ! {
     // Task B is added FIRST so the scheduler runs B before A. B calls
     // ipc_recv_and_yield and enters RecvWaiting; only then does A call
     // ipc_send_and_yield, ensuring Delivered (not Enqueued) on the first send.
+    // The idle task (ADR-0022) is added LAST so it sits behind B and A in
+    // the FIFO — it only ever runs when both application tasks are blocked.
     //
     // SAFETY: add_task calls init_context; stack tops are 16-byte aligned
     // (guaranteed by TaskStack's repr) and remain valid for the process
@@ -448,6 +535,9 @@ pub extern "C" fn kernel_entry() -> ! {
         sched
             .add_task(cpu, handle_a, task_a, TASK_A_STACK.top())
             .expect("add_task A failed: queue full or arena exhausted");
+        sched
+            .add_task(cpu, handle_idle, idle_entry, TASK_IDLE_STACK.top())
+            .expect("add_task idle failed: queue full or arena exhausted");
     }
 
     // Publish the scheduler before transferring control.
@@ -459,12 +549,13 @@ pub extern "C" fn kernel_entry() -> ! {
     console.write_bytes(b"umbrix: starting cooperative scheduler\n");
 
     // Transfer control to Task B (the first ready task). Does not return.
-    // SAFETY: SCHED is fully initialised; contexts set up by add_task.
-    // Audit: UNSAFE-2026-0008.
-    unsafe { (*SCHED.0.get()).assume_init_mut() }.start(cpu);
-
-    loop {
-        core::hint::spin_loop();
+    // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer cast
+    // (UNSAFE-2026-0013); `SCHED` was written above and no other code path
+    // holds a `&mut Scheduler` at this point. `start` honours the raw-pointer
+    // discipline: no `&mut` is live across the initial context switch.
+    // Audit: UNSAFE-2026-0014.
+    unsafe {
+        start(SCHED.as_mut_ptr(), cpu);
     }
 }
 

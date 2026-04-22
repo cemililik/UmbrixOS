@@ -49,6 +49,8 @@ Each ADR contains:
 | 0018 | [Badge scheme and `reply_recv` fastpath: formal deferral](0018-badge-scheme-and-reply-recv-deferral.md) | Accepted | 2026-04-21 |
 | 0019 | [Scheduler shape](0019-scheduler-shape.md) | Accepted | 2026-04-21 |
 | 0020 | [`ContextSwitch` trait and `Cpu` v2](0020-cpu-trait-v2-context-switch.md) | Accepted | 2026-04-21 |
+| 0021 | [Raw-pointer scheduler IPC-bridge API](0021-raw-pointer-scheduler-ipc-bridge.md) | Accepted | 2026-04-22 |
+| 0022 | [Idle task and typed scheduler deadlock error](0022-idle-task-and-typed-scheduler-deadlock.md) | Accepted | 2026-04-22 |
 
 ## Creating a new ADR
 
