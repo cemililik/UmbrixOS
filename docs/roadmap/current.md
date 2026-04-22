@@ -5,8 +5,9 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 ---
 
 - **Active phase:** B — opened 2026-04-21. First milestone B0 in progress.
-- **Active milestone:** B0 — Phase A exit hygiene. T-006 is in review; T-007..T-011 remain to open.
-- **Active task:** [T-006 — Raw-pointer scheduler API refactor](../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — `In Review` since 2026-04-22. All seven acceptance criteria met; awaiting maintainer sign-off to promote to `Done`.
+- **Active milestone:** B0 — Phase A exit hygiene. T-006 is in review; T-007 is in progress; T-008..T-011 remain to open.
+- **Active task:** [T-007 — Idle task + typed `SchedError::Deadlock` + resume-path hardening](../analysis/tasks/phase-b/T-007-idle-task-typed-deadlock.md) — `In Progress` since 2026-04-22. Implements ADR-0022 (Accepted 2026-04-22).
+- **Prior active task:** [T-006 — Raw-pointer scheduler API refactor](../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — `In Review` since 2026-04-22; awaiting maintainer sign-off to promote to `Done`.
 - **Working branch:** `development`.
 - **Last completed milestone:** A6 — Two-task IPC demo, 2026-04-21. **Phase A exit bar met.**
 - **Last completed task:** [T-005 — Two-task IPC demo](../analysis/tasks/phase-a/T-005-two-task-ipc-demo.md) — `Done` 2026-04-21.
@@ -18,7 +19,8 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
   - [A6 baseline performance review (2026-04-21)](../analysis/reviews/performance-optimization-reviews/2026-04-21-A6-baseline.md)
 - **Active decisions (2026-04-22):**
   - [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) — `Accepted`. Implemented by T-006.
-- **Next task to open:** T-007 — Idle task + typed `SchedError::Deadlock` + scheduler/IPC hardening bundle. ADR-0022 is the first step inside T-007.
+  - [ADR-0022 — Idle task and typed scheduler deadlock error](../decisions/0022-idle-task-and-typed-scheduler-deadlock.md) — `Accepted`. Implemented by T-007.
+- **Next task to open:** T-008 (architecture docs), T-009 (timer init), or T-011 (missing tests) — any of these can run in parallel with T-007.
 - **Next review trigger:** B0 closure — a full business review once T-006..T-011 are all Done. (T-006 mini-retro filed 2026-04-22.)
 
 ## Notes

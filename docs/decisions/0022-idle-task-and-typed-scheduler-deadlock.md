@@ -1,6 +1,6 @@
 # 0022 — Idle task and typed scheduler deadlock error
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-04-22
 - **Deciders:** @cemililik
 
