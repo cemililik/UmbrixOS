@@ -10,15 +10,16 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 - **Working branch:** `development`.
 - **Last completed milestone:** A6 — Two-task IPC demo, 2026-04-21. **Phase A exit bar met.**
 - **Last completed task:** [T-005 — Two-task IPC demo](../analysis/tasks/phase-a/T-005-two-task-ipc-demo.md) — `Done` 2026-04-21.
-- **Last reviews (2026-04-21):**
-  - [A6 completion / Phase A retrospective](../analysis/reviews/business-reviews/2026-04-21-A6-completion.md)
-  - [Code review — Umbrix → Phase A exit](../analysis/reviews/code-reviews/2026-04-21-umbrix-to-phase-a.md)
-  - [Security review — Umbrix → Phase A exit](../analysis/reviews/security-reviews/2026-04-21-umbrix-to-phase-a.md)
-  - [A6 baseline performance review](../analysis/reviews/performance-optimization-reviews/2026-04-21-A6-baseline.md)
+- **Last reviews:**
+  - [T-006 mini-retro (2026-04-22)](../analysis/reviews/business-reviews/2026-04-22-T-006-mini-retro.md)
+  - [A6 completion / Phase A retrospective (2026-04-21)](../analysis/reviews/business-reviews/2026-04-21-A6-completion.md)
+  - [Code review — Umbrix → Phase A exit (2026-04-21)](../analysis/reviews/code-reviews/2026-04-21-umbrix-to-phase-a.md)
+  - [Security review — Umbrix → Phase A exit (2026-04-21)](../analysis/reviews/security-reviews/2026-04-21-umbrix-to-phase-a.md)
+  - [A6 baseline performance review (2026-04-21)](../analysis/reviews/performance-optimization-reviews/2026-04-21-A6-baseline.md)
 - **Active decisions (2026-04-22):**
   - [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) — `Accepted`. Implemented by T-006.
 - **Next task to open:** T-007 — Idle task + typed `SchedError::Deadlock` + scheduler/IPC hardening bundle. ADR-0022 is the first step inside T-007.
-- **Next review trigger:** B0 closure — a business review once T-006..T-011 are all Done (or a mini-retro if T-006 promotes to `Done` first and the rest are scheduled).
+- **Next review trigger:** B0 closure — a full business review once T-006..T-011 are all Done. (T-006 mini-retro filed 2026-04-22.)
 
 ## Notes
 

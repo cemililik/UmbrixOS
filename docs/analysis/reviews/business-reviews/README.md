@@ -26,3 +26,4 @@ A business review may point at outcomes from those other reviews as part of "wha
 |------|-------|------|
 | 2026-04-21 | Milestone A2 — Capability table foundation | [2026-04-21-A2-completion.md](2026-04-21-A2-completion.md) |
 | 2026-04-21 | A6 completion / Phase A retrospective (A3–A6) | [2026-04-21-A6-completion.md](2026-04-21-A6-completion.md) |
+| 2026-04-22 | T-006 mini-retro — raw-pointer scheduler API refactor | [2026-04-22-T-006-mini-retro.md](2026-04-22-T-006-mini-retro.md) |
