@@ -210,3 +210,24 @@ Both forms are time-stamped so a reader can reconstruct the entry's state at any
 - **Rejected alternatives:** Extending the `&mut self` signatures is the hazard UNSAFE-2026-0012 describes; see ADR-0021 §Decision outcome. Using `NonNull<T>` instead of `*mut T` throughout would add a `NonNull::as_mut` call at every site and does not strengthen the aliasing contract (the caller already guarantees non-null via the shared safety contract). `core::ptr::addr_of_mut!` can avoid constructing an intermediate `&mut` to the parent scheduler when walking into `self.contexts`, but the context-switch call still uses the split-borrow idiom documented under UNSAFE-2026-0008; no net change.
 - **Reviewed by:** @cemililik (+ Claude Opus 4.7 agent).
 - **Status:** Active.
+
+### UNSAFE-2026-0015 — generic-timer system-register reads (`CNTPCT_EL0`, `CNTFRQ_EL0`)
+
+- **Introduced:** 2026-04-23, T-009 — Timer trait implementation for QEMU virt.
+- **Location:** [`bsp-qemu-virt/src/cpu.rs`](../../bsp-qemu-virt/src/cpu.rs) — `QemuVirtCpu::new` (one `MRS CNTFRQ_EL0`) and `<QemuVirtCpu as Timer>::now_ns` (one `MRS CNTPCT_EL0` per call).
+- **Operation:** Two read-only inline-asm `MRS` instructions:
+  - `MRS xN, CNTFRQ_EL0` — reads the firmware-set generic-timer frequency in Hz. Sampled exactly once per `QemuVirtCpu` instance, at construction.
+  - `MRS xN, CNTPCT_EL0` — reads the 64-bit free-running system counter. Sampled on every call to `now_ns`. The architecture guarantees monotonic non-decreasing reads.
+- **Invariants relied on:**
+  - Both registers are non-privileged reads at EL1; QEMU virt and any aarch64 hardware Tyrne targets run the kernel at EL1 by construction.
+  - `MRS` does not modify any state; `options(nostack, nomem)` is correct (no stack pointer touch, no memory access from the asm itself).
+  - `CNTFRQ_EL0` is set by firmware before kernel entry. `QemuVirtCpu::new` asserts it is non-zero; a zero value would cause a divide-by-zero in the resolution computation, so failing loudly at boot is preferable to a silent infinite resolution.
+  - `CNTPCT_EL0` is monotonic per ARM ARM §D11 — successive reads on the same core return non-decreasing values without an explicit barrier. No `ISB` is issued before the read; the trait contract permits sub-resolution drift across reads.
+  - Reordering: the inline-asm block carries no `clobber_abi` and does not declare `memory`, so the compiler may reorder it relative to surrounding non-asm code. For latency measurement this is acceptable; correctness of the kernel does not depend on the precise placement of the read.
+- **Rejected alternatives:**
+  - **Safe Rust intrinsic.** None exists; system-register access is intrinsically `unsafe` at the asm level. The `Timer` trait is the safe wrapper.
+  - **A higher-level crate** (e.g. `cortex-a` or `aarch64-cpu`). Would add a dependency for two `MRS` reads. Per the project's dependency policy (`docs/standards/infrastructure.md`), pulling a crate for a six-line operation is out of proportion. Revisit if a third or fourth system-register surface joins the picture.
+  - **Reading `CNTPCT_EL0` only and computing `freq` from a known-clock calibration.** Would couple the BSP to a specific platform; QEMU virt and Pi 4 differ. Reading firmware-set `CNTFRQ_EL0` is the portable choice.
+  - **Caching `now_ns` results.** Would defeat the trait's monotonic-time guarantee. Not considered.
+- **Reviewed by:** @cemililik (+ Claude Opus 4.7 agent).
+- **Status:** Active.

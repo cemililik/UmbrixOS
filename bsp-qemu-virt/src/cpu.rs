@@ -1,35 +1,58 @@
-//! `Cpu` and `ContextSwitch` implementations for the QEMU `virt` aarch64 target.
+//! `Cpu`, `ContextSwitch`, and `Timer` implementations for the QEMU `virt`
+//! aarch64 target.
 //!
 //! `QemuVirtCpu` implements:
 //! - [`tyrne_hal::Cpu`] — interrupt masking and core identity (object-safe).
 //! - [`tyrne_hal::ContextSwitch`] — cooperative register-state save/restore
 //!   (generic; see [ADR-0020]).
+//! - [`tyrne_hal::Timer`] — monotonic time via the ARM Generic Timer's
+//!   `CNTPCT_EL0` / `CNTFRQ_EL0` system registers (see [ADR-0010]). The
+//!   deadline-arming half (`arm_deadline` / `cancel_deadline`) is
+//!   intentionally `unimplemented!()` until GIC + interrupt-vector-table
+//!   wiring lands — see T-009 task notes.
 //!
 //! # Safety overview
 //!
 //! The context-switch assembly (`context_switch_asm`) is the only intrinsically
 //! unsafe operation in this file. Every other `unsafe impl` is a marker that
-//! follows from the struct's invariants. See the individual `// SAFETY:` comments
-//! and the audit entries `UNSAFE-2026-0006` through `UNSAFE-2026-0009`.
+//! follows from the struct's invariants, and every inline-asm system-register
+//! read is a non-mutating MRS at EL1. See the individual `// SAFETY:` comments
+//! and the audit entries `UNSAFE-2026-0006` through `UNSAFE-2026-0009`, plus
+//! `UNSAFE-2026-0015` for the Timer-trait additions.
 //!
+//! [ADR-0010]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0010-timer-trait.md
 //! [ADR-0020]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0020-cpu-trait-v2-context-switch.md
 
 use core::arch::{asm, naked_asm};
 
-use tyrne_hal::{ContextSwitch, CoreId, Cpu, IrqState};
+use tyrne_hal::{ContextSwitch, CoreId, Cpu, IrqState, Timer};
 
 // ─── QemuVirtCpu ────────────────────────────────────────────────────────────
 
 /// The QEMU `virt` aarch64 CPU implementation.
 ///
-/// A zero-size type — all behaviour comes from DAIF register manipulation
-/// and the context-switch assembly stub. Construct via [`QemuVirtCpu::new`].
+/// Holds the cached generic-timer parameters read once at construction; all
+/// other behaviour comes from DAIF register manipulation and the
+/// context-switch assembly stub. Construct via [`QemuVirtCpu::new`].
+///
+/// # Layout
+///
+/// Two `u64` fields, both populated from system registers in [`Self::new`]:
+///
+/// - `frequency_hz` — value of `CNTFRQ_EL0`, the system counter frequency in
+///   Hz. ARM ARM treats this as firmware-set; QEMU virt sets it to 62.5 MHz.
+/// - `resolution_ns` — derived as `1_000_000_000 / frequency_hz`. Cached so
+///   `now_ns` is a single multiply rather than a multiply + divide.
 pub struct QemuVirtCpu {
-    _priv: (),
+    /// Counter frequency from `CNTFRQ_EL0`, in Hz. Read once at construction.
+    frequency_hz: u64,
+    /// Pre-computed `1_000_000_000 / frequency_hz`. Cached so [`Timer::now_ns`]
+    /// avoids a 64-bit divide on every call.
+    resolution_ns: u64,
 }
 
 impl QemuVirtCpu {
-    /// Construct the CPU handle.
+    /// Construct the CPU handle, sampling `CNTFRQ_EL0` to set up the timer.
     ///
     /// # Safety
     ///
@@ -39,27 +62,68 @@ impl QemuVirtCpu {
     /// the second instance's saved `IrqState` would reflect a different DAIF
     /// snapshot and restoring it would silently override the first instance's
     /// state. In v1 (single-core), construct exactly once in `kernel_entry`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `CNTFRQ_EL0` reads as zero. ARM ARM specifies that firmware
+    /// must set this register; a zero value indicates a misconfigured BSP /
+    /// emulator and would make `now_ns` divide by zero. Failing loudly at
+    /// boot is preferred to a silent infinite resolution.
     #[must_use]
-    pub const unsafe fn new() -> Self {
-        Self { _priv: () }
+    pub unsafe fn new() -> Self {
+        let frequency_hz: u64;
+        // SAFETY: `MRS x, CNTFRQ_EL0` is a non-privileged read of a read-only
+        // system register, available at EL1 unconditionally. It does not
+        // modify any state and has no side effects beyond stalling for the
+        // pipeline-defined number of cycles. Rejected alternatives: there is
+        // no safe-Rust way to read a system register; the HAL trait is the
+        // safe abstraction wrapping this access. Audit: UNSAFE-2026-0015.
+        unsafe {
+            asm!("mrs {}, cntfrq_el0", out(reg) frequency_hz, options(nostack, nomem));
+        }
+        assert!(
+            frequency_hz > 0,
+            "CNTFRQ_EL0 reads as zero — firmware/emulator did not initialise the generic timer",
+        );
+        // Integer division: sub-resolution precision is silently lost per
+        // ADR-0010's contract ("Deadlines round to the nearest multiple of
+        // this value; finer precision at the call site is silently lost").
+        // Cached to avoid the divide on every now_ns call.
+        let resolution_ns = 1_000_000_000_u64 / frequency_hz;
+        Self {
+            frequency_hz,
+            resolution_ns,
+        }
+    }
+
+    /// Return the cached counter frequency in Hz, as read from `CNTFRQ_EL0`
+    /// at construction. Exposed for diagnostic / boot-banner use; not part
+    /// of any HAL trait.
+    #[must_use]
+    pub fn frequency_hz(&self) -> u64 {
+        self.frequency_hz
     }
 }
 
-// SAFETY: `QemuVirtCpu` is a zero-size marker; it has no interior mutability
-// and holds no pointers. Sending it between threads is safe — the only shared
-// hardware resource (DAIF) is accessed via per-core system registers that are
-// inherently thread-local in a single-core system.
+// SAFETY: `QemuVirtCpu` holds two `u64` fields written exactly once at
+// construction (`frequency_hz` and `resolution_ns`); afterwards it is
+// effectively immutable. It has no interior mutability and holds no
+// pointers. Sending it between threads is safe — the only shared hardware
+// resources (DAIF, the generic timer) are accessed via per-core system
+// registers that are inherently thread-local in a single-core system.
 // Rejected alternatives: wrapping in a `Mutex` or `AtomicUsize` would add
-// overhead with no benefit — DAIF is already a per-core register, not shared
-// memory; there is nothing to protect with a software lock.
+// overhead with no benefit — the cached fields never change after `new()`,
+// and DAIF / CNTPCT are per-core registers, not shared memory; there is
+// nothing to protect with a software lock.
 // Audit: UNSAFE-2026-0006.
 unsafe impl Send for QemuVirtCpu {}
 
-// SAFETY: Same reasoning as the `Send` impl — no interior mutability; DAIF
-// reads/writes are atomic per-core register operations. A `RefCell` or similar
-// interior-mutability wrapper would not help because the resource (DAIF) is
-// a hardware register, not a Rust data structure; the safe abstraction is
-// already the `Cpu` trait methods.
+// SAFETY: Same reasoning as the `Send` impl — no interior mutability after
+// construction; DAIF reads/writes and CNTPCT/CNTFRQ reads are atomic
+// per-core register operations. A `RefCell` or similar interior-mutability
+// wrapper would not help because the resource is a hardware register, not
+// a Rust data structure; the safe abstractions are already the `Cpu` and
+// `Timer` trait methods.
 // Audit: UNSAFE-2026-0006.
 unsafe impl Sync for QemuVirtCpu {}
 
@@ -270,5 +334,63 @@ impl ContextSwitch for QemuVirtCpu {
         // Audit: UNSAFE-2026-0009.
         ctx.lr = entry as usize as u64;
         ctx.sp = stack_top as u64;
+    }
+}
+
+// ─── Timer impl ──────────────────────────────────────────────────────────────
+
+impl Timer for QemuVirtCpu {
+    fn now_ns(&self) -> u64 {
+        let count: u64;
+        // SAFETY: `MRS x, CNTPCT_EL0` is a non-privileged read of the system
+        // counter, available unconditionally at EL1 (the `EL0PCTEN` gating
+        // bit applies only to EL0 access). The instruction does not modify
+        // any state; `options(nostack, nomem)` is correct. Rejected
+        // alternatives: there is no safe-Rust way to read a system register;
+        // the `Timer` trait is the safe abstraction wrapping this MRS.
+        // Audit: UNSAFE-2026-0015.
+        unsafe {
+            asm!("mrs {}, cntpct_el0", out(reg) count, options(nostack, nomem));
+        }
+        // Overflow analysis: at the lowest realistic generic-timer frequency
+        // (1 MHz → resolution_ns = 1000), the multiplication `count *
+        // resolution_ns` overflows `u64` only when `count > u64::MAX /
+        // resolution_ns ≈ 1.8e16` ticks ≈ 18e9 seconds ≈ 584 years. At QEMU
+        // virt's 62.5 MHz (resolution_ns = 16) the margin is even larger:
+        // `2^60 / 16 = 2^60 ÷ 16` ticks ≈ 1.15e18 ticks ≈ 18.4 millennia.
+        // Within any practical kernel uptime, the multiply is overflow-free.
+        // Per ADR-0010 the trait promises monotonicity and the `count *
+        // resolution_ns` form preserves it as long as `count` is monotonic
+        // (which the hardware counter guarantees) and `resolution_ns` is a
+        // positive constant (which `new()` asserts).
+        count.wrapping_mul(self.resolution_ns)
+    }
+
+    fn arm_deadline(&self, _deadline_ns: u64) {
+        // Deadline arming requires programming the generic-timer compare
+        // registers (`CNTV_CVAL_EL0` / `CNTV_CTL_EL0`) **and** routing the
+        // resulting IRQ via the GIC + interrupt-vector-table. T-009 scope
+        // (phase-b.md §B0 item 5) explicitly excludes IRQ wiring; the
+        // follow-up IRQ task will fill this method in. A silent no-op here
+        // would make a future caller think the deadline was armed when it
+        // was not, so this method panics loudly per unsafe-policy
+        // §"unimplemented surfaces".
+        unimplemented!(
+            "QemuVirtCpu::arm_deadline requires GIC + IVT wiring (a future B0 follow-up task); \
+             T-009 implements the measurement half of Timer only"
+        );
+    }
+
+    fn cancel_deadline(&self) {
+        // See `arm_deadline` above; cancellation only makes sense once
+        // arming is wired. Deferred to the same follow-up task.
+        unimplemented!(
+            "QemuVirtCpu::cancel_deadline requires GIC + IVT wiring (a future B0 follow-up task); \
+             T-009 implements the measurement half of Timer only"
+        );
+    }
+
+    fn resolution_ns(&self) -> u64 {
+        self.resolution_ns
     }
 }
