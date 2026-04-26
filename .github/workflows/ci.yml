@@ -157,10 +157,16 @@ jobs:
             ${{ runner.os }}-llvmcov-${{ env.NIGHTLY_PIN }}-
       - name: Install cargo-llvm-cov (cached)
         run: |
-          # `cargo install --locked cargo-llvm-cov` is idempotent: if the
-          # pinned version is already in ~/.cargo/bin from the cache
-          # restore above, this is a no-op (~1 s) instead of a 1-2 min
-          # rebuild.
-          cargo install --locked cargo-llvm-cov
+          # The cache restore step above places ~/.cargo/bin/cargo-llvm-cov
+          # if a prior run installed it. `cargo install` (older cargo)
+          # errors with "binary already exists" when the file is present,
+          # so guard the install with a presence check. On a cache miss
+          # this still installs cleanly; on a cache hit it's a no-op
+          # rather than a 1-2 min rebuild.
+          if command -v cargo-llvm-cov >/dev/null; then
+            echo "cargo-llvm-cov already installed: $(cargo-llvm-cov --version 2>/dev/null || echo 'version unknown')"
+          else
+            cargo install --locked cargo-llvm-cov
+          fi
       - name: cargo llvm-cov --summary-only
         run: cargo llvm-cov --workspace --exclude tyrne-bsp-qemu-virt --summary-only

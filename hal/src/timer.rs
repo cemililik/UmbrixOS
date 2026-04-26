@@ -79,15 +79,23 @@ pub const NANOS_PER_SECOND: u64 = 1_000_000_000;
 ///
 /// # Panics
 ///
-/// Panics if `frequency_hz == 0`. BSP impls should validate the frequency
-/// at construction (e.g. by reading `CNTFRQ_EL0` and asserting non-zero)
-/// so the panic is unreachable in production.
+/// Panics with a named message if `frequency_hz == 0`. BSP impls should
+/// validate the frequency at construction (e.g. by reading `CNTFRQ_EL0`
+/// and asserting non-zero) so the panic is unreachable in production —
+/// but the explicit `assert!` here ensures the contract is honoured even
+/// if a caller forgets, rather than degrading to an implicit
+/// divide-by-zero (which produces an unfriendly compile-time error in
+/// const context and an unfriendly runtime error otherwise).
 #[allow(
     clippy::cast_possible_truncation,
     reason = "saturating cast handled explicitly by the if/else guard above"
 )]
 #[must_use]
 pub const fn ticks_to_ns(count: u64, frequency_hz: u64) -> u64 {
+    assert!(
+        frequency_hz != 0,
+        "ticks_to_ns: frequency_hz must be > 0 (BSP must validate CNTFRQ_EL0 / equivalent at boot)",
+    );
     let intermediate = (count as u128) * (NANOS_PER_SECOND as u128);
     let ns = intermediate / (frequency_hz as u128);
     if ns > u64::MAX as u128 {
@@ -108,9 +116,14 @@ pub const fn ticks_to_ns(count: u64, frequency_hz: u64) -> u64 {
 ///
 /// # Panics
 ///
-/// Panics if `frequency_hz == 0`. See [`ticks_to_ns`].
+/// Panics with a named message if `frequency_hz == 0`. The assertion
+/// is explicit — see [`ticks_to_ns`] for the reasoning.
 #[must_use]
 pub const fn resolution_ns_for_freq(frequency_hz: u64) -> u64 {
+    assert!(
+        frequency_hz != 0,
+        "resolution_ns_for_freq: frequency_hz must be > 0 (BSP must validate CNTFRQ_EL0 / equivalent at boot)",
+    );
     // (1e9 + freq/2) / freq is the standard nearest-integer division
     // pattern for positive integers. Overflow analysis: u64::MAX / 2
     // ≈ 9.2e18, so adding 1e9 stays well within u64 for any frequency
@@ -217,5 +230,24 @@ mod tests {
     fn resolution_const_fn_works_in_const_context() {
         const RES: u64 = resolution_ns_for_freq(62_500_000);
         assert_eq!(RES, 16);
+    }
+
+    // ── Explicit-panic-on-zero-frequency contract ────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "ticks_to_ns: frequency_hz must be > 0")]
+    fn ticks_to_ns_panics_on_zero_frequency() {
+        // The doc-comment promises a named panic when freq == 0. Without
+        // the explicit `assert!` this would fall through to a u128 div-by-
+        // zero, which (a) produces a less informative panic message and
+        // (b) is a compile-time error in const context. Keep the contract
+        // honoured by an actual assert; this test guards it.
+        let _ = ticks_to_ns(1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "resolution_ns_for_freq: frequency_hz must be > 0")]
+    fn resolution_ns_for_freq_panics_on_zero_frequency() {
+        let _ = resolution_ns_for_freq(0);
     }
 }
