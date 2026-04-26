@@ -71,25 +71,62 @@ impl QemuVirtCpu {
     ///
     /// # Panics
     ///
-    /// Panics if `CNTFRQ_EL0` reads as zero. ARM ARM specifies that firmware
-    /// must set this register; a zero value indicates a misconfigured BSP /
-    /// emulator and would make `now_ns` divide by zero. Failing loudly at
-    /// boot is preferred to a silent infinite resolution.
+    /// Panics in two boot-time-invariant cases. Both indicate a
+    /// misconfigured BSP or a deviation from ADR-0012's boot contract;
+    /// failing loudly is preferred to silently producing wrong timer
+    /// values:
+    ///
+    /// - **`CurrentEL` is not EL1.** Tyrne expects `kernel_entry` to run
+    ///   at EL1 per [ADR-0012]; the assertion catches a future boot-flow
+    ///   change that leaves the kernel at EL2 / EL3 before any
+    ///   generic-timer MRS would silently misbehave. Audit: UNSAFE-2026-0016.
+    /// - **`CNTFRQ_EL0` reads as zero.** ARM ARM specifies firmware must
+    ///   set this register; a zero value would make `now_ns` divide by
+    ///   zero and `resolution_ns_for_freq` overflow. Audit: UNSAFE-2026-0015.
+    ///
+    /// [ADR-0012]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0012-boot-flow-qemu-virt.md
     #[must_use]
     pub unsafe fn new() -> Self {
+        // Runtime assertion of the ADR-0012 boot-time precondition: QEMU
+        // virt is supposed to deliver `kernel_entry` at EL1, and `boot.s`
+        // performs no EL transition. The MRS reads below assume that
+        // contract; if a future boot-flow change accidentally leaves us at
+        // EL2 or EL3, the timer system-register accesses would either
+        // trap or read undefined values. Catching the violation here —
+        // before any timer read — turns a subtle hardware-level
+        // misbehaviour into a loud, named boot panic.
+        let current_el_raw: u64;
+        // SAFETY: `MRS x, CurrentEL` is a non-privileged read of a
+        // read-only system register, available at every Exception Level.
+        // The instruction does not modify any state. `options(nostack,
+        // nomem)` is correct. Rejected alternatives: there is no safe-Rust
+        // path to read CurrentEL; this assertion is the safe abstraction.
+        // Audit: UNSAFE-2026-0016.
+        unsafe {
+            asm!("mrs {}, CurrentEL", out(reg) current_el_raw, options(nostack, nomem));
+        }
+        let current_el = (current_el_raw >> 2) & 0b11;
+        assert_eq!(
+            current_el, 1,
+            "QemuVirtCpu::new must run at EL1 per ADR-0012; observed EL{current_el} instead",
+        );
+
         let frequency_hz: u64;
         // SAFETY: `MRS x, CNTFRQ_EL0` is a non-privileged read of a read-only
         // system register. Tyrne enters `kernel_entry` at EL1 per
         // [ADR-0012] (QEMU virt drops the kernel to EL1 before execution;
-        // boot.s performs no EL transition). At EL1 in the non-VHE
-        // configuration the kernel runs in (HCR_EL2.{E2H, TGE} = {0, 0}),
-        // CNTFRQ_EL0 is unconditionally readable — the
-        // CNTHCTL_EL2.EL1PCTEN gating that exists in VHE mode does not
-        // apply here. The instruction does not modify any state;
-        // `options(nostack, nomem)` is correct (no stack pointer touch,
-        // no memory access). Rejected alternatives: there is no safe-Rust
-        // way to read a system register; the HAL `Timer` trait is the safe
-        // abstraction wrapping this access. Audit: UNSAFE-2026-0015.
+        // `boot.s` performs no EL transition) — and the assertion above
+        // confirms this at runtime, so the EL-precondition reasoning that
+        // follows is not just documentation but a checked invariant.
+        // At EL1 in the non-VHE configuration the kernel runs in
+        // (HCR_EL2.{E2H, TGE} = {0, 0}), CNTFRQ_EL0 is unconditionally
+        // readable — the CNTHCTL_EL2.EL1PCTEN gating that exists in VHE
+        // mode does not apply here. The instruction does not modify any
+        // state; `options(nostack, nomem)` is correct (no stack pointer
+        // touch, no memory access). Rejected alternatives: there is no
+        // safe-Rust way to read a system register; the HAL `Timer` trait
+        // is the safe abstraction wrapping this access.
+        // Audit: UNSAFE-2026-0015.
         //
         // [ADR-0012]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0012-boot-flow-qemu-virt.md
         unsafe {
