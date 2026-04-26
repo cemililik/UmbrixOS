@@ -24,6 +24,10 @@ Terminology used throughout Tyrne. Entries are alphabetical. If a term appears i
 
 **CDT (Capability Derivation Tree).** The parent/child tree of capabilities derived from one another via `cap_derive`. Revocation is transitive along this tree: revoking a parent revokes every descendant. In v1 the tree is per-table; cross-table transitivity is deferred (see [ADR-0023](decisions/0023-cross-table-capability-revocation-policy.md) when opened).
 
+**`CNTFRQ_EL0`.** ARM aarch64 system register that reports the Generic Timer's counter frequency in Hz. Set by firmware before kernel entry; read at EL0/EL1. On QEMU virt it is 62.5 MHz; on Cortex-A72 (Pi 4) it is 19.2 MHz. Tyrne reads it once at `QemuVirtCpu::new` and caches the derived `resolution_ns`.
+
+**`CNTPCT_EL0`.** ARM aarch64 system register that exposes the 64-bit free-running physical counter of the Generic Timer. Monotonic by hardware contract — successive reads on the same core return non-decreasing values. The basis for `Timer::now_ns` in [ADR-0010](decisions/0010-timer-trait.md).
+
 **Context switch.** The operation of saving the CPU state of one task and loading another so that the second task runs. Cost and frequency of context switches are the classic trade-off driver between monolithic and microkernel designs. In Tyrne the primitive is [`ContextSwitch::context_switch`](../hal/src/context_switch.rs) per [ADR-0020](decisions/0020-cpu-trait-v2-context-switch.md).
 
 **Cooperative scheduling.** A scheduling model in which the CPU is only taken from a running task when that task voluntarily yields. Tyrne v1 is cooperative and single-core; preemption arrives later in Phase B / Phase C.
@@ -31,6 +35,8 @@ Terminology used throughout Tyrne. Entries are alphabetical. If a term appears i
 **Endpoint.** In seL4-style IPC, a kernel object used to rendezvous senders and receivers. Possessing a capability to an endpoint is what grants the right to send or receive.
 
 **Generation tag.** The counter stored alongside every arena slot that detects stale handles. When a slot is freed and reused, its generation increments; a handle carries the generation it was issued with, so lookup can distinguish "same slot, new object" from "same slot, same object". See [ADR-0016](decisions/0016-kernel-object-storage.md).
+
+**Generic Timer (ARM).** The standard aarch64 timekeeping subsystem: a free-running 64-bit physical counter (`CNTPCT_EL0`), a firmware-reported frequency (`CNTFRQ_EL0`), and per-EL compare registers that fire interrupts when the counter passes a programmed deadline. Tyrne's `Timer` HAL trait wraps the counter half (read-only, no IRQ) in v1; the deadline-firing half is gated on GIC wiring (a future task).
 
 **HAL (Hardware Abstraction Layer).** The set of traits and types that decouple the kernel from any specific CPU or board. A BSP implements HAL traits; the kernel depends only on the traits.
 

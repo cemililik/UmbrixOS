@@ -5,11 +5,12 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 ---
 
 - **Active phase:** B — opened 2026-04-21. First milestone B0 in progress.
-- **Active milestone:** B0 — Phase A exit hygiene. T-006 and T-007 are in review; T-009 is in progress; T-011 is Draft; T-008 remains to open.
-- **Active task:** [T-009 — Timer init + `CNTPCT_EL0` measurement](../analysis/tasks/phase-b/T-009-timer-init-cntpct.md) — `In Progress` since 2026-04-23.
+- **Active milestone:** B0 — Phase A exit hygiene. T-006, T-007, and T-009 are in review; T-011 is Draft; T-008 remains to open.
+- **Active task:** None — T-009 moved to `In Review` 2026-04-23. Next: T-008 (architecture docs) when opened, or T-011 (missing tests) once dependent tasks reach `Done`.
 - **In review:**
   - [T-006 — Raw-pointer scheduler API refactor](../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — `In Review` since 2026-04-22.
   - [T-007 — Idle task + typed `SchedError::Deadlock` + resume-path hardening](../analysis/tasks/phase-b/T-007-idle-task-typed-deadlock.md) — `In Review` since 2026-04-22; implements ADR-0022.
+  - [T-009 — Timer init + `CNTPCT_EL0` measurement](../analysis/tasks/phase-b/T-009-timer-init-cntpct.md) — `In Review` since 2026-04-23; implements ADR-0010 (BSP side).
 - **Working branch:** `development`.
 - **Last completed milestone:** A6 — Two-task IPC demo, 2026-04-21. **Phase A exit bar met.**
 - **Last completed task:** [T-005 — Two-task IPC demo](../analysis/tasks/phase-a/T-005-two-task-ipc-demo.md) — `Done` 2026-04-21.
@@ -19,9 +20,10 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
   - [Code review — Tyrne → Phase A exit (2026-04-21)](../analysis/reviews/code-reviews/2026-04-21-tyrne-to-phase-a.md)
   - [Security review — Tyrne → Phase A exit (2026-04-21)](../analysis/reviews/security-reviews/2026-04-21-tyrne-to-phase-a.md)
   - [A6 baseline performance review (2026-04-21)](../analysis/reviews/performance-optimization-reviews/2026-04-21-A6-baseline.md)
-- **Active decisions (2026-04-22):**
-  - [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) — `Accepted`. Implemented by T-006.
-  - [ADR-0022 — Idle task and typed scheduler deadlock error](../decisions/0022-idle-task-and-typed-scheduler-deadlock.md) — `Accepted`. Implemented by T-007.
+- **Active decisions:**
+  - [ADR-0010 — Timer HAL trait](../decisions/0010-timer-trait.md) — `Accepted` (2026-04-20). BSP side implemented by T-009 (2026-04-23); IRQ-delivery half deferred to a future task.
+  - [ADR-0021 — Raw-pointer scheduler IPC-bridge API](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md) — `Accepted` (2026-04-22). Implemented by T-006.
+  - [ADR-0022 — Idle task and typed scheduler deadlock error](../decisions/0022-idle-task-and-typed-scheduler-deadlock.md) — `Accepted` (2026-04-22). Implemented by T-007. First rider's WFI activation gated on a follow-up IRQ-wiring task; T-009 closes only the time-source half.
 - **Next task to open:** T-008 (architecture docs) — last B0 task without a file. T-011 promotes from `Draft` to `In Progress` once T-006 and T-007 are `Done`.
 - **Next review trigger:** B0 closure — a full business review once T-006..T-011 are all Done. (T-006 mini-retro filed 2026-04-22.)
 

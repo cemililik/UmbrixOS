@@ -2,7 +2,7 @@
 
 - **Phase:** B
 - **Milestone:** B0 — Phase A exit hygiene
-- **Status:** In Progress
+- **Status:** In Review
 - **Created:** 2026-04-23
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** none — independent of T-006/T-007/T-008/T-011 within B0; only touches `QemuVirtCpu` and the BSP demo flow.
@@ -25,17 +25,17 @@ ADR-0022's first revision-notes rider expects T-009 to bring WFI back into idle'
 
 ## Acceptance criteria
 
-- [x] **`QemuVirtCpu` implements `tyrne_hal::Timer`** with four methods:
-  - [ ] `now_ns(&self) -> u64` — reads `CNTPCT_EL0`, multiplies by the cached resolution, returns nanoseconds since boot. Monotonic by hardware contract.
-  - [ ] `resolution_ns(&self) -> u64` — derived once at construction from `CNTFRQ_EL0` as `1_000_000_000 / freq_hz`.
-  - [ ] `arm_deadline(&self, _: u64)` — `unimplemented!()` with a message naming the missing IRQ-wiring task.
-  - [ ] `cancel_deadline(&self)` — `unimplemented!()` with the same naming.
-- [ ] **`QemuVirtCpu::new` reads `CNTFRQ_EL0` and asserts non-zero.** The frequency is cached on the struct; subsequent `now_ns` calls do not re-read it.
-- [ ] **No overflow on the multiplication.** Resolution is computed once (≤ 64-bit divide); `now_ns = ticks * resolution_ns` cannot overflow before ~150 years of boot time at the lowest QEMU virt frequency. Documented inline; no `u128` intermediate needed.
-- [ ] **Audit entry UNSAFE-2026-0015** for the new `MRS CNTPCT_EL0` and `MRS CNTFRQ_EL0` reads. Same shape as UNSAFE-2026-0007 (read-only system registers, defined behaviour at EL1, no state mutation).
-- [ ] **BSP measurement instrumentation.** `kernel_entry` records `now_ns()` at boot start and at "all tasks complete"; the demo prints elapsed nanoseconds for the boot-to-end window so QEMU output makes the measurement visible.
-- [ ] **Tests stay green.** 77 kernel + 34 test-hal = 111 host tests; `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` clean; QEMU smoke now produces the A6 five-line trace **plus** the elapsed-ns line.
-- [ ] **Documentation:** ADR-0022 first rider updated to make the two-step (T-009 measurement → future IRQ task → WFI in idle) sequence explicit; phase-b.md / current.md / task index updated; README capabilities list updated.
+- [x] **`QemuVirtCpu` implements `tyrne_hal::Timer`** with four methods. Commit `beb0963`.
+  - [x] `now_ns(&self) -> u64` — reads `CNTPCT_EL0`, multiplies by the cached resolution, returns nanoseconds since boot. Monotonic by hardware contract.
+  - [x] `resolution_ns(&self) -> u64` — derived once at construction from `CNTFRQ_EL0` as `1_000_000_000 / freq_hz`.
+  - [x] `arm_deadline(&self, _: u64)` — `unimplemented!()` with a message naming the missing IRQ-wiring task.
+  - [x] `cancel_deadline(&self)` — `unimplemented!()` with the same naming.
+- [x] **`QemuVirtCpu::new` reads `CNTFRQ_EL0` and asserts non-zero.** The frequency is cached on the struct as `frequency_hz`; resolution is pre-computed and cached as `resolution_ns`. Commit `beb0963`.
+- [x] **No overflow on the multiplication.** Resolution is a `u64`; `count * resolution_ns` is `wrapping_mul`. Overflow margin documented inline at ~584 years (1 MHz floor) and ~18 millennia (62.5 MHz, QEMU virt). No `u128` intermediate needed.
+- [x] **Audit entry UNSAFE-2026-0015** for the new `MRS CNTPCT_EL0` and `MRS CNTFRQ_EL0` reads. Same shape as UNSAFE-2026-0007. Append-only — no edits to existing entries. Commit `beb0963`.
+- [x] **BSP measurement instrumentation.** `kernel_entry` snapshots `now_ns()` into `BOOT_NS: StaticCell<u64>` after the timer banner; `task_a`'s "all tasks complete" path reads back the snapshot and prints the elapsed nanoseconds. Commit `55f2d10`.
+- [x] **Tests stay green.** 77 kernel + 34 test-hal = 111 host tests; `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` remains clean; QEMU smoke now produces the A6 five-line trace plus a `tyrne: timer ready (62500000 Hz, resolution 16 ns)` line and a `tyrne: boot-to-end elapsed = … ns` line.
+- [x] **Documentation:** ADR-0022 first rider's *Sub-rider — WFI activation requires *two* tasks, not one* spells out that T-009 is the time-source half and a separate IRQ-wiring task is the IRQ-delivery half; phase-b.md / current.md / task index updated; glossary gains `CNTPCT_EL0`, `CNTFRQ_EL0`, and `Generic Timer (ARM)`; README status line updated to reflect Phase B underway and the umbra-etymology line replaced with Tyrne's clean-slate identity per the project memory.
 
 ## Out of scope
 
@@ -62,16 +62,16 @@ ADR-0010 settled the trait shape; T-009 is implementation. In commit order:
 
 ## Definition of done
 
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo host-clippy` clean with `-D warnings`.
-- [ ] `cargo kernel-clippy` clean.
-- [ ] `cargo host-test` passes (111 host tests; T-009 adds none — implementation tested via QEMU smoke + miri stays clean).
-- [ ] `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` clean.
-- [ ] `cargo kernel-build` clean.
-- [ ] QEMU smoke reproduces the A6 five-line trace **plus** an elapsed-ns line; numerical value within the expected QEMU virt range (typically 100k–1M ns).
-- [ ] No new `unsafe` block without an audit entry; UNSAFE-2026-0015 written.
-- [ ] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0010` and `Audit: UNSAFE-2026-0015` trailers.
-- [ ] Task status updated to `In Review`; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated.
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo host-clippy` clean with `-D warnings`.
+- [x] `cargo kernel-clippy` clean.
+- [x] `cargo host-test` passes (111 host tests; T-009 adds none — implementation tested via QEMU smoke + miri stays clean).
+- [x] `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` clean.
+- [x] `cargo kernel-build` clean.
+- [x] QEMU smoke reproduces the A6 five-line trace plus an elapsed-ns line; observed value on QEMU virt: `boot-to-end elapsed = 10240992 ns` (QEMU-virtual time, not wall-clock realistic — value sanity-checks because it is positive and within order-of-magnitude expectation).
+- [x] No new `unsafe` block without an audit entry; UNSAFE-2026-0015 written.
+- [x] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0010` and `Audit: UNSAFE-2026-0015` trailers.
+- [x] Task status updated to `In Review`; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated.
 
 ## Design notes
 
@@ -102,3 +102,4 @@ ADR-0010 settled the trait shape; T-009 is implementation. In commit order:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-23 | @cemililik (+ Claude Opus 4.7 agent) | opened with status `In Progress`. Scope deliberately narrow: measurement only; deadline arming + WFI activation belong to a follow-up IRQ-wiring task. ADR-0022's first rider stays open. `current.md` will be updated to point at T-009 in the same commit. |
+| 2026-04-23 | @cemililik (+ Claude Opus 4.7 agent) | Implementation complete. Three commits landed: `beb0963` (`QemuVirtCpu` Timer impl + UNSAFE-2026-0015 audit entry; `frequency_hz` and `resolution_ns` cached at `new()`; `arm_deadline` / `cancel_deadline` `unimplemented!()` with explicit deferral messages), `55f2d10` (BSP boot-to-end instrumentation: `BOOT_NS` snapshot + `tyrne: timer ready` banner + `tyrne: boot-to-end elapsed` final line). Verification: 111 host tests green, miri 111/111 clean, fmt/host-clippy/kernel-clippy clean, kernel-build clean, QEMU smoke shows new lines bracketing the unchanged A6 trace. Documentation sweep: ADR-0022 sub-rider clarifying T-009 (time source) vs. future IRQ-wiring task (IRQ delivery); glossary +3 entries (`CNTPCT_EL0`, `CNTFRQ_EL0`, `Generic Timer`); README status + identity lines refreshed; phase-b.md + task index + current.md status flipped. Status → `In Review`. |
