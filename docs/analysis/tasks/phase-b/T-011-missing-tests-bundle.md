@@ -2,7 +2,7 @@
 
 - **Phase:** B
 - **Milestone:** B0 — Phase A exit hygiene
-- **Status:** Draft
+- **Status:** In Review
 - **Created:** 2026-04-23
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** [T-006](T-006-raw-pointer-scheduler-api.md), [T-007](T-007-idle-task-typed-deadlock.md) (both `In Review`). Both settle the code shape T-011 writes tests against; T-011 should not land until both have been promoted to `Done`.
@@ -107,3 +107,4 @@ In commit order:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-23 | @cemililik (+ Claude Opus 4.7 agent) | Opened with status `Draft`. Scope bundles (a) Phase A code-review §Test coverage items, (b) T-007 deferred `ipc_send_and_yield` state-restore test, (c) R2 coverage-baseline gap routing (start-prelude + cap/table sweep), and (d) an explicit re-run of R2 llvm-cov + R3 miri after the new tests land. Will move to `In Progress` once T-006 and T-007 are promoted to `Done`. |
+| 2026-04-27 | @cemililik (+ Claude Opus 4.7 agent) | Promoted `Draft → In Progress → In Review` in a single arc. Implementation lands thirteen new host tests across three files plus a small `start_prelude` refactor in `sched/mod.rs`. Test deltas: **+4 IPC** (`recv_with_full_table_preserves_pending_cap`, `stale_send_pending_with_some_cap_panics_in_debug` (`#[cfg(debug_assertions)]` + `#[should_panic]`), `stale_recv_waiting_resets_silently`, `stale_send_pending_without_cap_resets_silently`), **+5 sched** (`start_prelude_dispatches_head_and_marks_ready`, `start_prelude_panics_on_empty_ready_queue`, `ipc_send_and_yield_delivered_unblocks_receiver_and_yields`, `ipc_send_and_yield_enqueued_does_not_yield`, `ipc_send_and_yield_send_error_preserves_scheduler_state`), **+4 cap/table** (`cap_derive_on_full_table_returns_caps_exhausted`, `cap_copy_on_stale_handle_returns_invalid_handle`, `lookup_on_stale_handle_returns_invalid_handle`, `drop_first_child_updates_parent_first_child_pointer`). Total host tests: **130 → 143** (77 + 4 ipc + 5 sched + 4 cap = 90 kernel; 19 hal; 34 test-hal). Coverage [re-run report](../../reports/2026-04-27-coverage-rerun.md) confirms both AC gates met: `kernel/src/sched/mod.rs` regions **83.93 % → 93.97 %** (+9.81 pp) and workspace regions **94.41 % → 96.33 %** (+1.92 pp). Miri 143/143 clean. All other gates clean (fmt, host-clippy, kernel-clippy, kernel-build). Cap-table sweep delivered four targeted error-branch tests (the AC permits "five or fewer"); the fifth slot was deliberately left empty after audit of the existing test set found the obvious "etc." candidates already covered (`cap_take_stale_handle_fails`, `cap_take_on_node_with_children_fails`, `cap_drop_on_interior_node_returns_has_children`, `table_exhaustion_returns_caps_exhausted`). Status → `In Review`. |

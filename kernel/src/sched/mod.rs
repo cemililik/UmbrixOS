@@ -396,6 +396,55 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
 // [ADR-0021]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0021-raw-pointer-scheduler-ipc-bridge.md
 // [UNSAFE-2026-0012]: https://github.com/cemililik/TyrneOS/blob/main/docs/audits/unsafe-log.md
 
+/// Pre-switch dequeue + state-mutation half of [`start`].
+///
+/// Extracted from `start`'s inner block so the dequeue/state half can be
+/// covered by a host test — the post-prelude context switch is ABI
+/// assembly that no host harness can run, but everything else can be
+/// asserted on directly. After the call, the scheduler reflects:
+///
+/// - the head of `(*sched).ready` has been dequeued,
+/// - `(*sched).task_states[<returned index>]` is `TaskState::Ready`,
+/// - `(*sched).current` is `Some(<dequeued handle>)`.
+///
+/// The returned `usize` is the slot index of the dispatched task; `start`
+/// passes it straight to `cpu.context_switch` to address the saved
+/// context array. Refs: T-011.
+///
+/// # Panics
+///
+/// Panics if the ready queue is empty — calling `start` (and therefore
+/// `start_prelude`) before adding any task is a kernel programming error.
+///
+/// # Safety
+///
+/// `sched` must satisfy the Shared safety contract above (Pointer
+/// validity, exclusive ownership, no aliased `&mut Scheduler<C>`). The
+/// `&mut Scheduler<C>` materialised inside this function lives only for
+/// the body and is dropped before return, so `start` (and any future
+/// callers) can take a fresh momentary `&mut` afterwards without
+/// violating the non-aliasing rule.
+unsafe fn start_prelude<C: ContextSwitch + Cpu>(sched: *mut Scheduler<C>) -> usize {
+    // SAFETY: caller satisfies the Shared safety contract; the `&mut` is
+    // contained to this block. Rejected alternatives match `start`'s
+    // original block (`&mut self` reintroduces UNSAFE-2026-0012; ADR-0021
+    // Option B is a strict superset; a mutex relocates the unsafety).
+    // Audit: UNSAFE-2026-0014.
+    let s = unsafe { &mut *sched };
+
+    #[allow(
+        clippy::panic,
+        reason = "empty ready queue is a kernel programming error"
+    )]
+    let Some(next_handle) = s.ready.dequeue() else {
+        panic!("scheduler start called with empty ready queue");
+    };
+    let next_idx = next_handle.slot().index() as usize;
+    s.task_states[next_idx] = TaskState::Ready;
+    s.current = Some(next_handle);
+    next_idx
+}
+
 /// Start the scheduler by switching to the first ready task.
 ///
 /// Dequeues the head of the ready queue and restores its saved context,
@@ -424,27 +473,11 @@ impl<C: ContextSwitch + Cpu> Scheduler<C> {
 /// across the switch" rule — the throwaway context is constructed on a
 /// stack frame that `cpu.context_switch` never returns to.
 pub unsafe fn start<C: ContextSwitch + Cpu>(sched: *mut Scheduler<C>, cpu: &C) -> ! {
-    let next_idx = {
-        // SAFETY: caller contract — `sched` valid and exclusive for this
-        // inner block; `&mut` does not cross the switch below. Rejected
-        // alternatives: see §Rejected safer alternatives in the Shared
-        // safety contract above (`&mut self` reintroduces UNSAFE-2026-0012;
-        // a mutex relocates the unsafety; ADR-0021 Option B is a strict
-        // superset of this shape). Audit: UNSAFE-2026-0014.
-        let s = unsafe { &mut *sched };
-
-        #[allow(
-            clippy::panic,
-            reason = "empty ready queue is a kernel programming error"
-        )]
-        let Some(next_handle) = s.ready.dequeue() else {
-            panic!("scheduler start called with empty ready queue");
-        };
-        let next_idx = next_handle.slot().index() as usize;
-        s.task_states[next_idx] = TaskState::Ready;
-        s.current = Some(next_handle);
-        next_idx
-    }; // `s: &mut Scheduler<C>` drops here.
+    // SAFETY: caller satisfies the Shared safety contract for `sched`.
+    // `start_prelude` materialises a momentary `&mut Scheduler<C>` inside
+    // its own block and drops it before returning, so no `&mut` is alive
+    // across the `cpu.context_switch` below. Audit: UNSAFE-2026-0014.
+    let next_idx = unsafe { start_prelude(sched) };
 
     let mut throwaway = <C::TaskContext as Default>::default();
     let _guard = IrqGuard::new(cpu);
@@ -1239,6 +1272,282 @@ mod tests {
         assert!(
             matches!(result, Err(SchedError::Ipc(IpcError::PendingAfterResume))),
             "expected Err(Ipc(PendingAfterResume)), got {result:?}"
+        );
+    }
+
+    // ── start_prelude (T-011) ─────────────────────────────────────────────────
+    //
+    // `start_prelude` is the dequeue + state-mutation half of `start`,
+    // extracted in T-011 so a host test can assert on the post-call
+    // scheduler state without invoking the assembly context-switch the
+    // host harness cannot run. The two tests below cover the happy path
+    // (one or more tasks queued) and the failure mode (no tasks queued —
+    // a kernel programming error per ADR-0019). Refs: ADR-0019, T-011.
+
+    #[test]
+    fn start_prelude_dispatches_head_and_marks_ready() {
+        let cpu = FakeCpu;
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        let h0 = task_handle(0);
+        let h1 = task_handle(1);
+        let mut s0 = AlignedStack::<512>::new();
+        let mut s1 = AlignedStack::<512>::new();
+        // SAFETY: 16-byte aligned 512-byte stacks; FakeCpu init_context is
+        // a no-op so the stack memory is never read by the test path.
+        unsafe {
+            sched.add_task(&cpu, h0, spin_entry(), s0.top()).unwrap();
+            sched.add_task(&cpu, h1, spin_entry(), s1.top()).unwrap();
+        }
+
+        // Sanity: pre-call shape.
+        assert_eq!(sched.ready.len(), 2);
+        assert_eq!(sched.current, None);
+
+        // SAFETY: stack-local single-threaded scheduler; no aliasing.
+        let next_idx = unsafe { start_prelude(core::ptr::from_mut(&mut sched)) };
+
+        assert_eq!(next_idx, 0, "FIFO head (h0) is dispatched first");
+        assert_eq!(sched.task_states[next_idx], TaskState::Ready);
+        assert_eq!(sched.current, Some(h0));
+        assert_eq!(sched.ready.len(), 1, "h1 remains in the queue");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty ready queue")]
+    fn start_prelude_panics_on_empty_ready_queue() {
+        // No tasks added — `start_prelude` must fire the named panic
+        // (a kernel programming error: `start` cannot be called before
+        // tasks exist).
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        // SAFETY: stack-local scheduler; the panic is the assertion.
+        let _ = unsafe { start_prelude(core::ptr::from_mut(&mut sched)) };
+    }
+
+    // ── ipc_send_and_yield three-case bundle (T-011) ──────────────────────────
+    //
+    // T-007 covered the `Deadlock` and `PendingAfterResume` paths of
+    // `ipc_recv_and_yield`. T-011 closes the symmetric gap on the send
+    // side: the bridge has three terminal shapes — Delivered (deliver +
+    // unblock + yield), Enqueued (no receiver yet, no yield), and Err
+    // (ipc_send failed, scheduler state must not have moved). All three
+    // are asserted below. Refs: ADR-0017, ADR-0019, ADR-0021.
+
+    /// Build a `Capability` of given rights on a fresh endpoint, install
+    /// it into `table`, and return both handles.
+    fn setup_send_endpoint(
+        ep_arena: &mut EndpointArena,
+        table: &mut CapabilityTable,
+        rights: CapRights,
+    ) -> (EndpointHandle, CapHandle) {
+        let ep = create_endpoint(ep_arena, Endpoint::new(0)).unwrap();
+        let cap = Capability::new(rights, CapObject::Endpoint(ep));
+        let cap_h = table.insert_root(cap).unwrap();
+        (ep, cap_h)
+    }
+
+    fn send_msg(label: u64) -> Message {
+        Message {
+            label,
+            params: [label, label, label],
+        }
+    }
+
+    #[test]
+    fn ipc_send_and_yield_delivered_unblocks_receiver_and_yields() {
+        // Setup: h0 (sender, current), h1 (receiver, Blocked on ep).
+        // The endpoint's IPC queue is in RecvWaiting because h1 already
+        // ran ipc_recv before being context-switched out.
+        let cpu = FakeCpu;
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let mut table = CapabilityTable::new();
+        let mut s0 = AlignedStack::<512>::new();
+        let mut s1 = AlignedStack::<512>::new();
+        let h0 = task_handle(0);
+        let h1 = task_handle(1);
+
+        let (ep, ep_cap) =
+            setup_send_endpoint(&mut ep_arena, &mut table, CapRights::SEND | CapRights::RECV);
+
+        // Move the endpoint into RecvWaiting via a real ipc_recv call.
+        let recv_outcome = ipc_recv(&mut ep_arena, &mut queues, ep_cap, &mut table).unwrap();
+        assert!(matches!(recv_outcome, RecvOutcome::Pending));
+
+        // SAFETY: stacks are 16-byte aligned 512-byte buffers; FakeCpu
+        // init_context is a no-op so the stack memory is never used.
+        unsafe {
+            sched.add_task(&cpu, h0, spin_entry(), s0.top()).unwrap();
+            sched.add_task(&cpu, h1, spin_entry(), s1.top()).unwrap();
+        }
+
+        // Arrange the running shape: h0 is the current task; h1 is
+        // blocked on `ep`. Both have already been popped from the ready
+        // queue by their respective scheduler events.
+        sched.ready.dequeue(); // h0 head → current
+        sched.ready.dequeue(); // h1 → about to be marked Blocked
+        sched.current = Some(h0);
+        sched.task_states[1] = TaskState::Blocked { on: ep };
+
+        let sched_ptr = core::ptr::from_mut(&mut sched);
+        let arena_ptr = core::ptr::from_mut(&mut ep_arena);
+        let queues_ptr = core::ptr::from_mut(&mut queues);
+        let table_ptr = core::ptr::from_mut(&mut table);
+
+        // SAFETY: all four pointers refer to stack-local test state
+        // owned exclusively by this single-threaded test. Each pointer
+        // was derived exactly once above; no aliasing re-borrow.
+        let result = unsafe {
+            ipc_send_and_yield(
+                sched_ptr,
+                &cpu,
+                arena_ptr,
+                queues_ptr,
+                table_ptr,
+                ep_cap,
+                send_msg(42),
+                None,
+            )
+        };
+
+        assert_eq!(result.unwrap(), SendOutcome::Delivered);
+        assert_eq!(sched.current, Some(h1), "yield switched to unblocked h1");
+        assert_eq!(
+            sched.task_states[0],
+            TaskState::Ready,
+            "h0 re-enqueued as Ready"
+        );
+        assert_eq!(sched.task_states[1], TaskState::Ready, "h1 unblocked");
+        assert_eq!(
+            sched.ready.len(),
+            1,
+            "ready queue holds h0 after the switch"
+        );
+        assert!(
+            sched.contexts[0].switched,
+            "FakeCpu records that h0's context was saved",
+        );
+    }
+
+    #[test]
+    fn ipc_send_and_yield_enqueued_does_not_yield() {
+        // Setup: h0 alone, no receiver. ipc_send returns Enqueued; the
+        // bridge must NOT yield (needs_yield = false), so the scheduler
+        // is structurally unchanged after the call.
+        let cpu = FakeCpu;
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let mut table = CapabilityTable::new();
+        let mut s0 = AlignedStack::<512>::new();
+        let h0 = task_handle(0);
+
+        let (_, ep_cap) =
+            setup_send_endpoint(&mut ep_arena, &mut table, CapRights::SEND | CapRights::RECV);
+
+        // SAFETY: see prior tests.
+        unsafe {
+            sched.add_task(&cpu, h0, spin_entry(), s0.top()).unwrap();
+        }
+        sched.ready.dequeue();
+        sched.current = Some(h0);
+
+        let sched_ptr = core::ptr::from_mut(&mut sched);
+        let arena_ptr = core::ptr::from_mut(&mut ep_arena);
+        let queues_ptr = core::ptr::from_mut(&mut queues);
+        let table_ptr = core::ptr::from_mut(&mut table);
+
+        // SAFETY: pointer-derivation discipline as above.
+        let result = unsafe {
+            ipc_send_and_yield(
+                sched_ptr,
+                &cpu,
+                arena_ptr,
+                queues_ptr,
+                table_ptr,
+                ep_cap,
+                send_msg(99),
+                None,
+            )
+        };
+
+        assert_eq!(result.unwrap(), SendOutcome::Enqueued);
+        assert_eq!(sched.current, Some(h0), "no switch on Enqueued");
+        assert_eq!(sched.task_states[0], TaskState::Ready);
+        assert_eq!(sched.ready.len(), 0, "ready queue still empty");
+        assert!(
+            !sched.contexts[0].switched,
+            "FakeCpu did not record a save (no switch happened)",
+        );
+    }
+
+    #[test]
+    fn ipc_send_and_yield_send_error_preserves_scheduler_state() {
+        // Setup: h0 (current), h1 (Ready in queue). The endpoint cap
+        // grants RECV but not SEND, so `ipc_send` fails its rights check
+        // with `IpcError::InvalidCapability`. The bridge must surface
+        // this typed error and leave the scheduler exactly as it was.
+        // Symmetric to T-007's `ipc_recv_and_yield_returns_deadlock_…`
+        // state-restore guarantee.
+        let cpu = FakeCpu;
+        let mut sched: Scheduler<FakeCpu> = Scheduler::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let mut table = CapabilityTable::new();
+        let mut s0 = AlignedStack::<512>::new();
+        let mut s1 = AlignedStack::<512>::new();
+        let h0 = task_handle(0);
+        let h1 = task_handle(1);
+
+        // RECV-only cap → ipc_send's SEND check fails.
+        let (_, ep_cap) = setup_send_endpoint(&mut ep_arena, &mut table, CapRights::RECV);
+
+        // SAFETY: see prior tests.
+        unsafe {
+            sched.add_task(&cpu, h0, spin_entry(), s0.top()).unwrap();
+            sched.add_task(&cpu, h1, spin_entry(), s1.top()).unwrap();
+        }
+        sched.ready.dequeue(); // h0 → current
+        sched.current = Some(h0);
+        // h1 stays in the ready queue.
+
+        // Snapshot pre-call scheduler shape.
+        let prior_current = sched.current;
+        let prior_state_0 = sched.task_states[0];
+        let prior_state_1 = sched.task_states[1];
+        let prior_ready_len = sched.ready.len();
+
+        let sched_ptr = core::ptr::from_mut(&mut sched);
+        let arena_ptr = core::ptr::from_mut(&mut ep_arena);
+        let queues_ptr = core::ptr::from_mut(&mut queues);
+        let table_ptr = core::ptr::from_mut(&mut table);
+
+        // SAFETY: pointer-derivation discipline as above.
+        let result = unsafe {
+            ipc_send_and_yield(
+                sched_ptr,
+                &cpu,
+                arena_ptr,
+                queues_ptr,
+                table_ptr,
+                ep_cap,
+                send_msg(0),
+                None,
+            )
+        };
+
+        assert!(
+            matches!(result, Err(SchedError::Ipc(IpcError::InvalidCapability))),
+            "expected Err(Ipc(InvalidCapability)), got {result:?}"
+        );
+        // Scheduler state must be untouched.
+        assert_eq!(sched.current, prior_current);
+        assert_eq!(sched.task_states[0], prior_state_0);
+        assert_eq!(sched.task_states[1], prior_state_1);
+        assert_eq!(sched.ready.len(), prior_ready_len);
+        assert!(
+            !sched.contexts[0].switched,
+            "no switch — error path returned before yield",
         );
     }
 }
