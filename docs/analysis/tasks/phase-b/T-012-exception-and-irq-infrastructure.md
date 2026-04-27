@@ -41,7 +41,7 @@ The criteria below cover T-012's full scope. If a T-012a / T-012b split happens 
 - [ ] **Tests.**
   - Host: a `FakeIrqController` in `tyrne-test-hal` implementing `IrqController` so kernel-side handler-dispatch logic can be exercised without QEMU.
   - QEMU smoke: a deliberate `arm_deadline(now + 100ms)` test path (gated behind a `cfg(...)` or a debug task entry) confirms the IRQ fires and the handler runs.
-- [ ] **Documentation:** ADR-0011 cross-references; new architecture doc `docs/architecture/exceptions.md` — or a section in T-008's `scheduler.md` — explaining the vector-table layout, dispatch flow, and the GIC programming sequence; ADR-0022 first rider's *Sub-rider* updated with "closed by T-012, commit `<sha>`"; ADR-0010 `arm_deadline` / `cancel_deadline` notes updated to reference real implementation.
+- [ ] **Documentation:** ADR-0011 cross-references; new architecture doc **`docs/architecture/exceptions.md`** — required, not optional, per the [B0 closure consolidated security review](../../reviews/security-reviews/2026-04-27-B0-closure.md) §8 recommendation ("Architecture docs are a security multiplier"). Must explain the vector-table layout, dispatch flow, the GIC programming sequence, and how IRQ delivery interacts with the raw-pointer scheduler bridge from ADR-0021 (likely an ADR-0021 Amendment when wired). ADR-0022 first rider's *Sub-rider* updated with "closed by T-012, commit `<sha>`"; ADR-0010 `arm_deadline` / `cancel_deadline` notes updated to reference real implementation.
 - [ ] **No regression.** 126 host tests + Miri 124 + QEMU smoke all stay green.
 
 ## Out of scope

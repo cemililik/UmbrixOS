@@ -28,3 +28,4 @@ A business review may point at outcomes from those other reviews as part of "wha
 | 2026-04-21 | A6 completion / Phase A retrospective (A3–A6) | [2026-04-21-A6-completion.md](2026-04-21-A6-completion.md) |
 | 2026-04-22 | T-006 mini-retro — raw-pointer scheduler API refactor | [2026-04-22-T-006-mini-retro.md](2026-04-22-T-006-mini-retro.md) |
 | 2026-04-27 | T-009 mini-retro — Timer impl + lessons-into-rules in ADR-0013 | [2026-04-27-T-009-mini-retro.md](2026-04-27-T-009-mini-retro.md) |
+| 2026-04-27 | B0 closure retrospective — Phase A exit hygiene + ADR-0025 + cost-of-arc analysis | [2026-04-27-B0-closure.md](2026-04-27-B0-closure.md) |
