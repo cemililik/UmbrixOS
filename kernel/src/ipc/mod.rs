@@ -487,9 +487,11 @@ fn install_cap_if_some(
 )]
 mod tests {
     use super::{
-        ipc_notify, ipc_recv, ipc_send, IpcError, IpcQueues, Message, RecvOutcome, SendOutcome,
+        ipc_notify, ipc_recv, ipc_send, EndpointState, IpcError, IpcQueues, Message, RecvOutcome,
+        SendOutcome,
     };
     use crate::cap::{CapHandle, CapObject, CapRights, Capability, CapabilityTable};
+    use crate::obj::arena::SlotId;
     use crate::obj::endpoint::{create_endpoint, Endpoint, EndpointArena, EndpointHandle};
     use crate::obj::notification::{create_notification, Notification, NotificationArena};
     use crate::obj::TaskHandle;
@@ -986,5 +988,174 @@ mod tests {
             panic!("expected Received");
         };
         assert_eq!(msg, test_msg(55));
+    }
+
+    // ── ReceiverTableFull pre-flight protects an in-flight cap (T-011) ────────
+    //
+    // The receiver-side `ipc_recv` performs a pre-flight check
+    // (`pending_has_cap && caller_table.is_full()`) before mutating endpoint
+    // state. The contract is: if the receiver's table cannot accept the
+    // in-flight cap, the operation must fail *without* moving the
+    // endpoint out of `SendPending` — the cap stays parked there until
+    // some other recv attempt has room. This test pairs the failure-mode
+    // with a successful retry to prove that step 1's failure preserved the
+    // cap rather than silently dropping it. Refs: ADR-0017.
+
+    #[test]
+    fn recv_with_full_table_preserves_pending_cap() {
+        // Arrange: sender holds an extra (transferable) endpoint cap; the
+        // first ipc_send moves that cap into the endpoint's SendPending
+        // state.
+        let mut sender_table = CapabilityTable::new();
+        let mut ep_arena = EndpointArena::default();
+        let mut queues = IpcQueues::new();
+        let (ep_handle, send_ep_cap) = setup_ep(&mut sender_table, &mut ep_arena, all_ep_rights());
+        let xfer_target = create_endpoint(&mut ep_arena, Endpoint::new(0xBB)).unwrap();
+        let xfer_cap_h = sender_table
+            .insert_root(Capability::new(
+                all_task_rights(),
+                CapObject::Endpoint(xfer_target),
+            ))
+            .unwrap();
+
+        let send_outcome = ipc_send(
+            &mut ep_arena,
+            &mut queues,
+            send_ep_cap,
+            &mut sender_table,
+            test_msg(7),
+            Some(xfer_cap_h),
+        )
+        .unwrap();
+        assert_eq!(send_outcome, SendOutcome::Enqueued);
+
+        // Receiver holds the recv cap; we then fill the rest of the table
+        // with dummy task caps until is_full() returns true.
+        let mut recv_table = CapabilityTable::new();
+        let recv_ep_cap = recv_table
+            .insert_root(Capability::new(
+                CapRights::RECV,
+                CapObject::Endpoint(ep_handle),
+            ))
+            .unwrap();
+
+        // Track the first dummy so the recovery step has a slot to free.
+        let mut first_dummy: Option<CapHandle> = None;
+        let mut tag: u16 = 0;
+        while !recv_table.is_full() {
+            let h = recv_table
+                .insert_root(Capability::new(all_rights(), task_object(tag)))
+                .unwrap();
+            if first_dummy.is_none() {
+                first_dummy = Some(h);
+            }
+            tag = tag.wrapping_add(1);
+        }
+        assert!(recv_table.is_full(), "test setup: recv_table must be full");
+
+        // Act 1: recv on a full table with a pending cap returns the typed
+        // error and does *not* mutate the endpoint state.
+        let err = ipc_recv(&mut ep_arena, &mut queues, recv_ep_cap, &mut recv_table).unwrap_err();
+        assert_eq!(err, IpcError::ReceiverTableFull);
+
+        // Act 2: free one slot in recv_table and retry. If the cap had been
+        // silently dropped in Act 1, the second ipc_recv would either
+        // succeed with `cap: None` (silent loss) or return Pending. The
+        // assertion below — `cap: Some(_)` — proves the cap survived.
+        let dummy = first_dummy.expect("test setup: at least one dummy was inserted");
+        recv_table.cap_drop(dummy).unwrap();
+        assert!(!recv_table.is_full());
+
+        let outcome = ipc_recv(&mut ep_arena, &mut queues, recv_ep_cap, &mut recv_table).unwrap();
+        let RecvOutcome::Received {
+            msg,
+            cap: Some(recv_cap_h),
+        } = outcome
+        else {
+            panic!("expected Received with Some(cap), got {outcome:?}");
+        };
+        assert_eq!(msg, test_msg(7));
+        // The recovered cap is live in recv_table.
+        assert!(recv_table.lookup(recv_cap_h).is_ok());
+    }
+
+    // ── reset_if_stale_generation guard tests (T-011) ─────────────────────────
+    //
+    // `IpcQueues::reset_if_stale_generation` (used by `state_of` /
+    // `peek_state`) protects the slot-reuse path. When a new endpoint is
+    // allocated in a slot whose previous occupant has been destroyed, the
+    // queue's recorded `slot_generations[idx]` lags behind the new
+    // handle's generation. The function detects the mismatch, asserts —
+    // in debug — that the prior state did not leave a `Some(cap)` behind
+    // (which would be silently dropped here, since the function holds no
+    // capability table), and resets the slot to `Idle`.
+    //
+    // The pair below covers both halves of the contract:
+    //   1. SendPending { cap: Some(_) } with a stale generation must
+    //      panic so the leak is loud.
+    //   2. RecvWaiting (no cap) with a stale generation must reset
+    //      silently — proving the assert's predicate is not over-broad.
+    // Both tests reach reset_if_stale_generation via `peek_state` (a
+    // public-to-the-module method that calls it as the first step), so
+    // the production path is exercised, not a local copy.
+
+    /// Build an `EndpointHandle` directly for tests that need to inject a
+    /// specific (slot, generation) without going through the arena. Mirrors
+    /// the test helper pattern used in `sched/mod.rs`.
+    fn handle_at(slot_idx: u16, generation: u32) -> EndpointHandle {
+        EndpointHandle::from_slot(SlotId::from_parts(slot_idx, generation))
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "endpoint slot must be drained")]
+    fn stale_send_pending_with_some_cap_panics_in_debug() {
+        // Inject a SendPending { cap: Some(_) } at slot 0 with the queue's
+        // generation pinned at 0; then peek with generation 1. The
+        // mismatch path is the only branch reset_if_stale_generation
+        // takes, and the debug_assert fires before any state mutation.
+        let mut queues = IpcQueues::new();
+        let leaked_cap = Capability::new(all_rights(), task_object(0xDE));
+        queues.states[0] = EndpointState::SendPending {
+            msg: test_msg(0xCAFE),
+            cap: Some(leaked_cap),
+        };
+        queues.slot_generations[0] = 0;
+
+        // peek_state internally calls reset_if_stale_generation.
+        let _ = queues.peek_state(handle_at(0, 1));
+    }
+
+    #[test]
+    fn stale_recv_waiting_resets_silently() {
+        // RecvWaiting carries no cap; the assert's predicate must NOT
+        // fire here. The state must be reset to Idle and slot_generations
+        // updated to the new generation.
+        let mut queues = IpcQueues::new();
+        queues.states[0] = EndpointState::RecvWaiting;
+        queues.slot_generations[0] = 0;
+
+        let _ = queues.peek_state(handle_at(0, 1));
+
+        assert!(matches!(queues.states[0], EndpointState::Idle));
+        assert_eq!(queues.slot_generations[0], 1);
+    }
+
+    #[test]
+    fn stale_send_pending_without_cap_resets_silently() {
+        // Symmetric to the test above but for SendPending { cap: None }
+        // — the assert's predicate explicitly excludes this case
+        // (only Some(_) is loud).
+        let mut queues = IpcQueues::new();
+        queues.states[0] = EndpointState::SendPending {
+            msg: test_msg(0xBEEF),
+            cap: None,
+        };
+        queues.slot_generations[0] = 0;
+
+        let _ = queues.peek_state(handle_at(0, 1));
+
+        assert!(matches!(queues.states[0], EndpointState::Idle));
+        assert_eq!(queues.slot_generations[0], 1);
     }
 }

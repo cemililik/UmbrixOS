@@ -11,13 +11,12 @@ The architecture is being written in phases. Many documents listed below are pla
 | Document | Purpose | Status |
 |----------|---------|--------|
 | [`overview.md`](overview.md) | Top-level structure: kernel, userspace, HAL, boot flow; with Mermaid diagrams. | Accepted |
-| `kernel-core.md` | Core kernel responsibilities: scheduler, IPC, memory, capabilities. | Planned — Phase 2 |
 | [`security-model.md`](security-model.md) | Capability system, trust boundaries, threat model. | Accepted |
-| `memory-management.md` | Physical + virtual memory, MMU/paging, allocators. | Planned |
-| `scheduling.md` | Scheduler design, priorities, real-time considerations. | Planned |
-| `ipc.md` | Inter-process communication, message passing, endpoints, capability transfer. | Planned |
 | [`hal.md`](hal.md) | Hardware Abstraction Layer: trait surfaces, board support packages, portability. | Accepted |
-| [`boot.md`](boot.md) | Boot flow from reset vector through kernel init to first userspace task. | Accepted (v0.0.1 — QEMU virt only) |
+| [`boot.md`](boot.md) | Boot flow from reset vector through kernel init to first userspace task. | Accepted (v0.0.1 — QEMU virt only; EL drop pending T-013) |
+| [`scheduler.md`](scheduler.md) | Cooperative FIFO scheduler: ready queue, idle task, raw-pointer IPC bridge, ContextSwitch trait. | Accepted (v0.0.1 — single-core, no preemption) |
+| [`ipc.md`](ipc.md) | Inter-process communication: synchronous send/recv, endpoint state machine, capability transfer, scheduler-bridge wrappers. | Accepted (v0.0.1 — depth-1 endpoints) |
+| `memory-management.md` | Physical + virtual memory, MMU/paging, allocators. | Planned — B2 |
 | `drivers.md` | Userspace driver model, capability grants, driver API. | Planned |
 | `userspace.md` | Init process, system services, shell, root of trust. | Planned |
 

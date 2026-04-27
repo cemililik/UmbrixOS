@@ -36,16 +36,17 @@ This subsection exists to prevent the failure mode the A → B0 arc rediscovered
 four times: an ADR's "future task X will do Y" handwave going unverified until
 implementation surfaces the gap (see ADR-0025 §Rule 1 (forward-reference contract)).>
 
-Example:
-```
+Example (placeholders only — replace with the real T-NNNs your decision names):
+```text
 For this decision to be fully in effect:
-1. CNTVCT_EL0 read path — T-009 (In Review)
-2. Generic-timer compare register programming — T-012 (Draft, IRQ-wiring task)
-3. GICv2 distributor + CPU interface configuration — T-012
-4. EL1 exception vector table install — T-012
+1. <Subsystem A read path> — T-NNN (Status)
+2. <Subsystem B programming step> — T-NNN (Status)
+3. <Driver C configuration> — T-NNN
+4. <Vector D install> — T-NNN
 
-T-009 closes only step 1. Steps 2-4 are scoped under T-012, opened
-in the same commit as this ADR.
+The first task closes only step 1. Remaining steps are scoped under
+the second task, opened in the same commit as this ADR if it does
+not yet exist.
 ```
 
 If a step has no T-NNN slot, the ADR cannot Accept until one is opened (per

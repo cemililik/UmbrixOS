@@ -127,6 +127,8 @@ For the two rules above to be fully in effect:
   
   This withdrawal is logged here rather than in a §"Revision notes" rider on a future commit because the rule is being removed *before* Accept — the historical record of the rule's existence + reason for withdrawal is the value, not the rule itself. Per the project's rider conventions ([ADR-0021](0021-raw-pointer-scheduler-ipc-bridge.md) §Revision notes uses the same pattern), pre-Accept revisions are recorded inline in the §Revision notes section of the same ADR.
 
+- **2026-04-27 — Post-Accept wording correction.** Line 11 of the §Context originally reads *"…produced four ADRs (ADR-0021, ADR-0022) that needed post-Accept riders…"*. This is a factual misstatement — the count is **two ADRs that produced four riders**, not four ADRs. The riders, in order, are: (1) ADR-0021's mid-proposal revision before Accept, (2) ADR-0021's post-Accept rider, (3) ADR-0022's first rider, (4) ADR-0022's first-rider sub-rider. The correct reading of line 11 is therefore *"…produced four riders across two ADRs (ADR-0021, ADR-0022)…"*. The original wording is left intact above per Rule 2 (in-place rewrites of an Accepted ADR's body are forbidden); this rider is the canonical correction. The error is grammatical/factual, not substantive — the surrounding analysis ("Each rider's content traced back to one of two implicit rules") is unaffected.
+
 ## References
 
 - [ADR-0013 — Roadmap and planning process](0013-roadmap-and-planning.md) — the parent ADR these rules amend.

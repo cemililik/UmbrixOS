@@ -1017,4 +1017,137 @@ mod tests {
         assert_eq!(t.lookup(a).unwrap_err(), CapError::InvalidHandle);
         assert_eq!(t.lookup(c).unwrap_err(), CapError::InvalidHandle);
     }
+
+    // ── targeted error-branch coverage (T-011) ────────────────────────────────
+    //
+    // The four tests below close specific gaps that the R2 coverage
+    // baseline flagged (cap/table.rs at 96.84 % regions before T-011):
+    //
+    // 1. `cap_derive` on a full table — the `pop_free()` failure branch.
+    //    `table_exhaustion_returns_caps_exhausted` exercises the same
+    //    branch via `insert_root`, but `cap_derive` has its own call
+    //    site and the path needs an active parent capability to derive
+    //    from.
+    // 2. `cap_copy` on a stale handle — symmetric to
+    //    `cap_take_stale_handle_fails` and `drop_twice_returns_invalid_handle`,
+    //    but for a third entry point that resolves through `lookup`.
+    // 3. `lookup` on a stale handle — direct exercise of the
+    //    handle-validation branch every other API delegates to. Distinct
+    //    from the indirect coverage other tests give.
+    // 4. `cap_drop` on a first-child — `unlink_from_siblings`'s "head of
+    //    the list" branch. `drop_middle_sibling_preserves_list_integrity`
+    //    above covers the middle case; this completes the unlink-path
+    //    branch coverage.
+    //
+    // Refs: ADR-0014 (capability representation), ADR-0001 (capability
+    // table foundation), R2 coverage baseline (2026-04-23).
+
+    #[test]
+    fn cap_derive_on_full_table_returns_caps_exhausted() {
+        let mut t = CapabilityTable::new();
+        // Reserve slot 0 as the parent we will try to derive from.
+        let parent = t.insert_root(root_cap()).unwrap();
+        // Fill the rest of the table with roots so `pop_free()` returns
+        // None when `cap_derive` reaches it.
+        let mut handles: [Option<CapHandle>; CAP_TABLE_CAPACITY] = [None; CAP_TABLE_CAPACITY];
+        handles[0] = Some(parent);
+        let mut idx = 1;
+        while !t.is_full() {
+            handles[idx] = Some(t.insert_root(root_cap()).unwrap());
+            idx += 1;
+        }
+        assert!(t.is_full(), "test setup: table must be full");
+
+        // Now `cap_derive` from `parent` must fail with CapsExhausted —
+        // the parent itself is valid (has DERIVE right by construction)
+        // but no slot is free for the new child entry.
+        assert_eq!(
+            t.cap_derive(parent, all_rights(), task_object(0xCD))
+                .unwrap_err(),
+            CapError::CapsExhausted,
+        );
+        // Parent must still be live — `cap_derive`'s pre-flight does not
+        // mutate the parent before allocating the child slot.
+        assert!(t.lookup(parent).is_ok());
+    }
+
+    #[test]
+    fn cap_copy_on_stale_handle_returns_invalid_handle() {
+        // After `cap_drop`, the handle's generation lags the slot's
+        // bumped generation; `cap_copy` resolves through `lookup` and
+        // must surface the stale-handle error rather than copying a
+        // half-dead capability.
+        let mut t = CapabilityTable::new();
+        let h = t.insert_root(root_cap()).unwrap();
+        t.cap_drop(h).unwrap();
+        assert_eq!(
+            t.cap_copy(h, all_rights()).unwrap_err(),
+            CapError::InvalidHandle,
+        );
+    }
+
+    #[test]
+    fn lookup_on_stale_handle_returns_invalid_handle() {
+        // Direct exercise of `CapabilityTable::lookup`'s validation
+        // branch. Slot reuse with a bumped generation must produce the
+        // same `InvalidHandle` error as a never-allocated handle.
+        let mut t = CapabilityTable::new();
+        let h1 = t.insert_root(root_cap()).unwrap();
+        t.cap_drop(h1).unwrap();
+        // After drop, the slot's generation is bumped — a subsequent
+        // insert_root in the same slot returns a *different* handle
+        // value, and h1 is permanently stale.
+        let h2 = t.insert_root(root_cap()).unwrap();
+        assert_eq!(h1.index(), h2.index(), "test setup: same slot reused");
+        assert_ne!(
+            h1.generation(),
+            h2.generation(),
+            "test setup: generation must differ",
+        );
+        assert_eq!(t.lookup(h1).unwrap_err(), CapError::InvalidHandle);
+        assert!(t.lookup(h2).is_ok(), "fresh handle still resolves");
+    }
+
+    #[test]
+    fn drop_first_child_updates_parent_first_child_pointer() {
+        // `unlink_from_siblings` has three branches: root (no parent),
+        // first-child (parent.first_child == self), and mid-list. The
+        // existing `drop_middle_sibling_preserves_list_integrity` test
+        // covers mid-list; this test pins the first-child branch by
+        // dropping the head of the parent's child list and then
+        // observing that revoke (which walks first_child → siblings)
+        // still reaches the remaining children. Without the head-of-
+        // list branch firing correctly, revoke would skip the new head
+        // and the remaining children would leak.
+        //
+        // Note on list ordering: `cap_derive` *prepends* — each new
+        // child becomes the new head, with the previous head as its
+        // `next_sibling`. After the three derives below, the list head
+        // is `last` (most-recently-derived), then `middle`, then
+        // `first`. To exercise the head branch we therefore drop
+        // `last`, not `first` — the variable names track derivation
+        // order, not list position.
+        let mut t = CapabilityTable::new();
+        let root = t.insert_root(root_cap()).unwrap();
+        let first = t.cap_derive(root, all_rights(), task_object(1)).unwrap();
+        let middle = t.cap_derive(root, all_rights(), task_object(2)).unwrap();
+        let last = t.cap_derive(root, all_rights(), task_object(3)).unwrap();
+
+        // Drop the head of the child list (= the most-recently-derived
+        // entry, `last`, by the prepend rule above).
+        t.cap_drop(last).unwrap();
+        assert_eq!(t.lookup(last).unwrap_err(), CapError::InvalidHandle);
+        assert!(
+            t.lookup(first).is_ok(),
+            "first-derived child still reachable"
+        );
+        assert!(t.lookup(middle).is_ok(), "middle child still reachable");
+
+        // If `unlink_from_siblings` left `parent.first_child` pointing at
+        // the freed slot, revoke would walk into a dead entry and miss
+        // the surviving children. Both must be revoked by the BFS.
+        t.cap_revoke(root).unwrap();
+        assert_eq!(t.lookup(first).unwrap_err(), CapError::InvalidHandle);
+        assert_eq!(t.lookup(middle).unwrap_err(), CapError::InvalidHandle);
+    }
 }

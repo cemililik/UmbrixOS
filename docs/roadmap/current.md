@@ -5,9 +5,12 @@ A short pointer file updated as work progresses. For the full plan see [`phases/
 ---
 
 - **Active phase:** B — opened 2026-04-21. First milestone B0 in progress.
-- **Active milestone:** B0 — Phase A exit hygiene (T-006, T-007, T-009 **Done** 2026-04-27 per independent-agent approval review; T-008 **Draft** opened 2026-04-27; T-011 Draft → ready to start). B1 — Drop to EL1 + exception infrastructure (T-012 Draft, T-013 Draft; ADR-0024 **Accepted** 2026-04-27, T-013 unblocked).
-- **Active task:** None — three tasks just promoted to Done; T-008 newly opened as Draft. Next: T-011 (missing tests) flipping to In Progress, OR T-008 (architecture docs) flipping from Draft to In Progress, OR T-013 (EL drop) starting now that ADR-0024 is Accepted.
-- **In review:** none.
+- **Active milestone:** B0 — Phase A exit hygiene (T-006, T-007, T-009 **Done** 2026-04-27 per independent-agent approval review; T-008, T-011 **In Review** 2026-04-27). B1 — Drop to EL1 + exception infrastructure (ADR-0024 **Accepted** 2026-04-27; T-013 **In Review** 2026-04-27 — boot.s EL drop + current_el helper; T-012 **Draft**).
+- **Active task:** None — T-008, T-011, T-013 all in review awaiting promotion. Next: review pass to promote to Done; then T-012 (exception infra) is the remaining open thread.
+- **In review:**
+  - [T-011](../analysis/tasks/phase-b/T-011-missing-tests-bundle.md) — Missing tests bundle (B0); 130 → 143 host tests; sched coverage 83.93 → 93.97 % regions; coverage rerun report at [docs/analysis/reports/2026-04-27-coverage-rerun.md](../analysis/reports/2026-04-27-coverage-rerun.md).
+  - [T-008](../analysis/tasks/phase-b/T-008-architecture-docs.md) — Architecture docs (B0); new `scheduler.md` + `ipc.md` + Timer subsection update in `hal.md` + Phase A status banner in `overview.md`.
+  - [T-013](../analysis/tasks/phase-b/T-013-el-drop-to-el1.md) — EL drop to EL1 (B1); `boot.s` reset-vector extended with K3-12 + EL2→EL1 transition; new `tyrne_hal::cpu::current_el()` helper; UNSAFE-2026-0017 + 0018 audited; `boot.md` and `bsp-boot-checklist.md` updated. QEMU smoke pending — must run from a host harness with `qemu-system-aarch64`.
 - **Working branch:** `development`.
 - **Last completed milestone:** A6 — Two-task IPC demo, 2026-04-21. **Phase A exit bar met.** B0 closure pending T-008 and T-011.
 - **Last completed tasks:** T-006 / T-007 / T-009 — all `Done` 2026-04-27. Approval review at [docs/analysis/reviews/business-reviews/2026-04-27-T-009-mini-retro.md](../analysis/reviews/business-reviews/2026-04-27-T-009-mini-retro.md) and the close-out approval-review pass commit.

@@ -23,7 +23,12 @@
 //! follows from the struct's invariants, and every inline-asm system-register
 //! read is a non-mutating MRS at EL1. See the individual `// SAFETY:` comments
 //! and the audit entries `UNSAFE-2026-0006` through `UNSAFE-2026-0009`, plus
-//! `UNSAFE-2026-0015` for the Timer-trait additions.
+//! `UNSAFE-2026-0015` for the Timer-trait additions and `UNSAFE-2026-0016`
+//! (boot-time `CurrentEL` self-check, with its T-013 Amendment recording the
+//! load-bearing-post-condition shift after ADR-0024). The `MRS CurrentEL` itself
+//! is now performed by the safe-Rust `tyrne_hal::cpu::current_el()` helper —
+//! audited under `UNSAFE-2026-0018` — rather than duplicated as an inline-asm
+//! block in this file.
 //!
 //! [ADR-0010]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0010-timer-trait.md
 //! [ADR-0020]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0020-cpu-trait-v2-context-switch.md
@@ -88,55 +93,73 @@ impl QemuVirtCpu {
     /// values:
     ///
     /// - **`CurrentEL` is not EL1.** Tyrne expects `kernel_entry` to run
-    ///   at EL1 per [ADR-0012]; the assertion catches a future boot-flow
-    ///   change that leaves the kernel at EL2 / EL3 before any
-    ///   generic-timer MRS would silently misbehave. Audit: UNSAFE-2026-0016.
+    ///   at EL1 per [ADR-0012] / [ADR-0024]; the assertion catches a
+    ///   regression in `boot.s`'s EL drop sequence (or a future
+    ///   EL3-entry hardware target the v1 boot path does not handle)
+    ///   before any generic-timer MRS would silently misbehave. The
+    ///   read goes through `tyrne_hal::cpu::current_el()` (audited
+    ///   under UNSAFE-2026-0018); the assertion itself is audited
+    ///   under UNSAFE-2026-0016 (with its 2026-04-27 / T-013
+    ///   Amendment recording the load-bearing-post-condition shift).
     /// - **`CNTFRQ_EL0` reads as zero.** ARM ARM specifies firmware must
     ///   set this register; a zero value would make `now_ns` divide by
     ///   zero and `resolution_ns_for_freq` overflow. Audit: UNSAFE-2026-0015.
     ///
     /// [ADR-0012]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0012-boot-flow-qemu-virt.md
+    /// [ADR-0024]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0024-el-drop-policy.md
     #[must_use]
     pub unsafe fn new() -> Self {
-        // Runtime assertion of the ADR-0012 boot-time precondition: QEMU
-        // virt is supposed to deliver `kernel_entry` at EL1, and `boot.s`
-        // performs no EL transition. The MRS reads below assume that
-        // contract; if a future boot-flow change accidentally leaves us at
-        // EL2 or EL3, the timer system-register accesses would either
+        // Runtime assertion of the ADR-0012 + ADR-0024 boot-time
+        // precondition: after `boot.s`'s EL drop sequence (per ADR-0024)
+        // the kernel runs at EL1 unconditionally. The MRS reads below
+        // assume that contract; if a future boot-flow change leaves us
+        // at EL2 or EL3, the timer system-register accesses would either
         // trap or read undefined values. Catching the violation here —
         // before any timer read — turns a subtle hardware-level
         // misbehaviour into a loud, named boot panic.
-        let current_el_raw: u64;
-        // SAFETY: `MRS x, CurrentEL` is a non-privileged read of a
-        // read-only system register, available at every Exception Level.
-        // The instruction does not modify any state. `options(nostack,
-        // nomem)` is correct. Rejected alternatives: there is no safe-Rust
-        // path to read CurrentEL; this assertion is the safe abstraction.
-        // Audit: UNSAFE-2026-0016.
-        unsafe {
-            asm!("mrs {}, CurrentEL", out(reg) current_el_raw, options(nostack, nomem));
-        }
-        let current_el = (current_el_raw >> 2) & 0b11;
+        //
+        // The `tyrne_hal::cpu::current_el()` call is the safe-Rust
+        // wrapper around the `MRS CurrentEL` introduced by T-013;
+        // see UNSAFE-2026-0018 for the helper's audit and
+        // UNSAFE-2026-0016's Amendment for why this assertion is now a
+        // load-bearing post-condition rather than a defensive guard.
+        let current_el = tyrne_hal::cpu::current_el();
         assert_eq!(
             current_el, 1,
-            "QemuVirtCpu::new must run at EL1 per ADR-0012; observed EL{current_el} instead",
+            "QemuVirtCpu::new must run at EL1 per ADR-0012/ADR-0024; observed EL{current_el} instead",
         );
 
         let frequency_hz: u64;
         // SAFETY: `MRS x, CNTFRQ_EL0` is a non-privileged read of a read-only
         // system register. Tyrne enters `kernel_entry` at EL1 per
-        // [ADR-0012] (QEMU virt drops the kernel to EL1 before execution;
-        // `boot.s` performs no EL transition) — and the assertion above
-        // confirms this at runtime, so the EL-precondition reasoning that
-        // follows is not just documentation but a checked invariant.
-        // At EL1 in the non-VHE configuration the kernel runs in
-        // (HCR_EL2.{E2H, TGE} = {0, 0}), CNTFRQ_EL0 is unconditionally
-        // readable — the CNTHCTL_EL2.EL1PCTEN gating that exists in VHE
-        // mode does not apply here. The instruction does not modify any
-        // state; `options(nostack, nomem)` is correct (no stack pointer
-        // touch, no memory access). Rejected alternatives: there is no
-        // safe-Rust way to read a system register; the HAL `Timer` trait
-        // is the safe abstraction wrapping this access.
+        // [ADR-0012] / [ADR-0024] — `boot.s` performs an EL2 → EL1
+        // transition when the firmware/emulator delivers at EL2, falls
+        // through when delivered at EL1, and halts on EL3. The
+        // `tyrne_hal::cpu::current_el()` assertion above (audited under
+        // UNSAFE-2026-0018, with UNSAFE-2026-0016's T-013 Amendment
+        // describing the load-bearing-post-condition shift) is the
+        // checked invariant that pins `CurrentEL == 1` here, so the
+        // EL-precondition reasoning that follows is not documentation
+        // alone. At EL1 in the non-VHE configuration the kernel runs in
+        // (`HCR_EL2.{E2H, TGE} = {0, 0}`, established by `boot.s`'s
+        // explicit `HCR_EL2 = (1 << 31)` write per UNSAFE-2026-0017),
+        // CNTFRQ_EL0 is unconditionally readable — the
+        // `CNTHCTL_EL2.EL1PCTEN` gating that exists in VHE mode does
+        // not apply here. The instruction does not modify any state;
+        // `options(nostack, nomem)` is correct (no stack pointer
+        // touch, no memory access).
+        //
+        // Rejected alternatives:
+        // (a) There is no safe-Rust way to read a system register; the
+        //     HAL `Timer` trait is the safe abstraction wrapping this
+        //     access.
+        // (b) A higher-level crate (`cortex-a` / `aarch64-cpu`) would
+        //     pull a dependency for one MRS — disproportionate per the
+        //     dependency policy.
+        // (c) Reading `CNTPCT_EL0` (physical counter) instead of
+        //     `CNTFRQ_EL0` was rejected during T-009's second-read
+        //     review; ADR-0010 mandates the virtual family for the
+        //     read side.
         // Audit: UNSAFE-2026-0015.
         //
         // [ADR-0012]: https://github.com/cemililik/TyrneOS/blob/main/docs/decisions/0012-boot-flow-qemu-virt.md
@@ -414,18 +437,30 @@ impl Timer for QemuVirtCpu {
         // coincide; using CNTVCT preserves correctness when a future boot
         // path leaves a non-zero offset.
         //
-        // EL access: at EL1 in the non-VHE configuration Tyrne runs in
-        // (per ADR-0012 the kernel enters at EL1 and boot.s performs no EL
-        // transition), CNTVCT_EL0 is unconditionally readable — the
-        // CNTHCTL_EL2.EL1VCTEN gating that exists in VHE mode does not
-        // apply here. The instruction does not modify any state;
-        // `options(nostack, nomem)` is correct.
+        // EL access: per ADR-0012 / ADR-0024, `boot.s` drives the kernel
+        // to EL1 (transitioning from EL2 if the firmware/emulator
+        // delivered there). The runtime assertion in `QemuVirtCpu::new`
+        // (`tyrne_hal::cpu::current_el() == 1`, audited under
+        // UNSAFE-2026-0018 / UNSAFE-2026-0016 Amendment) guarantees we
+        // are at EL1 by the time this method ever runs. At EL1 in the
+        // non-VHE configuration the kernel runs in
+        // (`HCR_EL2.{E2H, TGE} = {0, 0}`, written explicitly in `boot.s`
+        // per UNSAFE-2026-0017), CNTVCT_EL0 is unconditionally readable
+        // — the `CNTHCTL_EL2.EL1VCTEN` gating that exists in VHE mode
+        // does not apply here. The instruction does not modify any
+        // state; `options(nostack, nomem)` is correct.
         //
-        // Rejected alternatives: there is no safe-Rust way to read a
-        // system register; the `Timer` trait is the safe abstraction
-        // wrapping this MRS. The `cortex-a` / `aarch64-cpu` crates would
-        // wrap a single MRS in a dependency, disproportionate per the
-        // dependency policy. Audit: UNSAFE-2026-0015.
+        // Rejected alternatives:
+        // (a) Read `CNTPCT_EL0` (physical) instead — rejected during
+        //     T-009's second-read review per ADR-0010's register-family
+        //     mandate; would silently mismatch the deferred deadline-
+        //     arming side once `CNTVOFF_EL2 ≠ 0`.
+        // (b) No safe-Rust way to read a system register; the `Timer`
+        //     trait is the safe abstraction wrapping this MRS.
+        // (c) A higher-level crate (`cortex-a` / `aarch64-cpu`) would
+        //     pull a dependency for one MRS — disproportionate per the
+        //     dependency policy.
+        // Audit: UNSAFE-2026-0015.
         unsafe {
             asm!("mrs {}, cntvct_el0", out(reg) count, options(nostack, nomem));
         }

@@ -2,7 +2,7 @@
 
 - **Phase:** B
 - **Milestone:** B1 — Drop to EL1 in boot, install exception infrastructure
-- **Status:** Draft
+- **Status:** In Review
 - **Created:** 2026-04-27
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** [ADR-0024](../../../decisions/0024-el-drop-policy.md) — must be `Accepted` before this task moves to `In Progress`.
@@ -23,17 +23,17 @@ phase-b.md §B1 sub-breakdown items 2 + 3 (asm extension + Rust helpers) are thi
 
 ## Acceptance criteria
 
-- [ ] **ADR-0024 Accepted** before any code lands.
-- [ ] **`boot.s` EL2→EL1 transition.** When `CurrentEL` reads as EL2 at the reset vector, `boot.s` configures `HCR_EL2`, `SPSR_EL2`, `ELR_EL2` (target = next instruction post-`ERET`), and issues `ERET`. When `CurrentEL` reads as EL1, the transition block is skipped (no-op). When `CurrentEL` reads as EL3, the boot panics (or halts; v1 has no EL3-aware infrastructure) — the failure mode ADR-0024 settles.
-- [ ] **Bundle K3-12 (per phase-b.md §B1 item 2):** explicit `msr daifset, #0xf` at the head of `_start` as a BSP reset-vector standard, before any code that could be interrupted.
-- [ ] **Cpu HAL helper for `current_el`.** Either (a) a free function `tyrne_hal::cpu::current_el() -> u8` (read CurrentEL inline-asm, return the 2-bit EL field), or (b) a `Cpu::current_el(&self) -> u8` method on the trait. The choice depends on whether the BSP needs to call this before `QemuVirtCpu` is constructed (early-boot path). Decision deferred to §Approach.
-- [ ] **Audit entry.** New `unsafe` block(s) for the boot-time MRS / MSR sequence and any new Rust-side asm. Likely UNSAFE-2026-0017+ (see UNSAFE-2026-0016 for precedent — the existing `CurrentEL` read in `QemuVirtCpu::new` is covered, but the boot-asm path may need its own entry, and the EL2 system-register writes definitely need one).
-- [ ] **Tests.**
-  - QEMU smoke at default config (EL1 entry) — boot trace unchanged.
-  - QEMU smoke at `-machine virtualization=on` (EL2 entry) — boot trace identical (proves EL drop landed correctly).
-  - Host: helper function (if extracted as `fn current_el() -> u8`) is `cfg(target_arch = "aarch64")`-gated; trivially unit-testable on aarch64-targeted host (none today, so this test may be deferred until a CI runner with aarch64 emulation is available, OR via a `#[cfg(test)]`-gated mock).
-- [ ] **`UNSAFE-2026-0016` assertion remains in place.** T-013 makes the assertion's success condition reliably reachable, but does not remove the runtime check — it is now a load-bearing invariant rather than a defensive guard.
-- [ ] **Documentation.** ADR-0024 references; phase-b.md §B1 sub-breakdown items 2+3 marked complete; update `docs/architecture/boot.md` (when written, or as part of T-008) with the new EL transition flow; add `current_el` accessor to glossary or HAL docs as appropriate.
+- [x] **ADR-0024 Accepted** before any code lands. (Accepted 2026-04-27, commit `a92e833`.)
+- [x] **`boot.s` EL2→EL1 transition.** When `CurrentEL` reads as EL2 at the reset vector, `boot.s` configures `HCR_EL2`, `SPSR_EL2`, `ELR_EL2` (target = next instruction post-`ERET`), and issues `ERET`. When `CurrentEL` reads as EL1, the transition block is skipped (no-op). When `CurrentEL` reads as EL3, the boot panics (or halts; v1 has no EL3-aware infrastructure) — the failure mode ADR-0024 settles. (Delivered: `bsp-qemu-virt/src/boot.s` lines 38-97; EL3 path halts in named-label `wfe`-loop, no Rust panic infrastructure available pre-`kernel_entry`.)
+- [x] **Bundle K3-12 (per phase-b.md §B1 item 2):** explicit `msr daifset, #0xf` at the head of `_start` as a BSP reset-vector standard, before any code that could be interrupted. (Delivered: `boot.s` line 39 — first instruction at `_start`.)
+- [x] **Cpu HAL helper for `current_el`.** Either (a) a free function `tyrne_hal::cpu::current_el() -> u8` (read CurrentEL inline-asm, return the 2-bit EL field), or (b) a `Cpu::current_el(&self) -> u8` method on the trait. The choice depends on whether the BSP needs to call this before `QemuVirtCpu` is constructed (early-boot path). Decision deferred to §Approach. (Delivered: option (a) — free function; per ADR-0024 §Open questions, the early-boot path needs to read EL before any `Cpu` instance has been constructed and a trait method would force every test mock to declare an EL.)
+- [x] **Audit entry.** New `unsafe` block(s) for the boot-time MRS / MSR sequence and any new Rust-side asm. Likely UNSAFE-2026-0017+ (see UNSAFE-2026-0016 for precedent — the existing `CurrentEL` read in `QemuVirtCpu::new` is covered, but the boot-asm path may need its own entry, and the EL2 system-register writes definitely need one). (Delivered: UNSAFE-2026-0017 boot.s sequence; UNSAFE-2026-0018 `current_el` helper; UNSAFE-2026-0016 Amendment for the load-bearing-post-condition shift.)
+- **Tests.**
+  - [ ] QEMU smoke at default config (EL1 entry) — boot trace unchanged. *(Deferred: cannot run from this development environment; maintainer / CI runner to verify. Tracked in PR #9 test plan.)*
+  - [ ] QEMU smoke at `-machine virtualization=on` (EL2 entry) — boot trace identical (proves EL drop landed correctly). *(Same deferral.)*
+  - [x] Host: helper function (if extracted as `fn current_el() -> u8`) is `cfg(target_arch = "aarch64")`-gated; trivially unit-testable on aarch64-targeted host (none today, so this test may be deferred until a CI runner with aarch64 emulation is available, OR via a `#[cfg(test)]`-gated mock). (Delivered: function is cfg-gated; host tests do not invoke it; reachable from the BSP build only.)
+- [x] **`UNSAFE-2026-0016` assertion remains in place.** T-013 makes the assertion's success condition reliably reachable, but does not remove the runtime check — it is now a load-bearing invariant rather than a defensive guard. (Delivered: `bsp-qemu-virt/src/cpu.rs` lines 115-119; UNSAFE-2026-0016 Amendment dated 2026-04-27 documents the load-bearing-post-condition shift.)
+- [x] **Documentation.** ADR-0024 references; phase-b.md §B1 sub-breakdown items 2+3 marked complete; update `docs/architecture/boot.md` (when written, or as part of T-008) with the new EL transition flow; add `current_el` accessor to glossary or HAL docs as appropriate. (Delivered: `docs/architecture/boot.md` rewritten with three-phase `_start` Mermaid sequence + line-by-line asm; `docs/standards/bsp-boot-checklist.md` §1 + §1a updated; `current_el` documented in `hal/src/cpu.rs` and referenced from `bsp-qemu-virt/src/cpu.rs`.)
 
 ## Out of scope
 
@@ -54,16 +54,16 @@ ADR-0024 will settle the policy questions before T-013's code lands. At sketch l
 
 ## Definition of done
 
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo host-clippy` clean with `-D warnings`.
-- [ ] `cargo kernel-clippy` clean.
-- [ ] `cargo host-test` passes (T-013 may add a host test for the `current_el` helper if the architecture allows; otherwise none).
-- [ ] `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` passes.
-- [ ] `cargo kernel-build` clean.
-- [ ] QEMU smoke reproduces the eight-line trace at default config; same trace at `-machine virtualization=on`.
-- [ ] No new `unsafe` block without an audit entry; new entries cited from every introducing site.
-- [ ] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0024` and `Audit: UNSAFE-2026-NNNN` trailers.
-- [ ] Task status updated to `In Review`; phase-b.md §B1 sub-breakdown items 2+3 marked complete; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated.
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo host-clippy` clean with `-D warnings`.
+- [x] `cargo kernel-clippy` clean.
+- [x] `cargo host-test` passes (T-013 may add a host test for the `current_el` helper if the architecture allows; otherwise none). (Delivered: 143 / 143; no host test for `current_el` — cfg-gated to bare-metal target.)
+- [x] `cargo +nightly miri test --workspace --exclude tyrne-bsp-qemu-virt` passes. (143 / 143 clean.)
+- [x] `cargo kernel-build` clean.
+- [ ] QEMU smoke reproduces the eight-line trace at default config; same trace at `-machine virtualization=on`. *(Deferred: cannot run from this development environment; maintainer / CI runner to verify per PR #9 test plan checklist.)*
+- [x] No new `unsafe` block without an audit entry; new entries cited from every introducing site. (UNSAFE-2026-0017 cited in `boot.s`; UNSAFE-2026-0018 cited in `hal/src/cpu.rs::current_el`; UNSAFE-2026-0016 Amendment cited in `bsp-qemu-virt/src/cpu.rs::QemuVirtCpu::new`.)
+- [x] Commit messages follow [`commit-style.md`](../../../standards/commit-style.md) with `Refs: ADR-0024` and `Audit: UNSAFE-2026-NNNN` trailers. (Commit `f289d4d` carries both trailers.)
+- [x] Task status updated to `In Review`; phase-b.md §B1 sub-breakdown items 2+3 marked complete; [`docs/roadmap/current.md`](../../../roadmap/current.md) updated. (`In Review` since 2026-04-27.)
 
 ## Design notes
 
@@ -87,3 +87,4 @@ ADR-0024 will settle the policy questions before T-013's code lands. At sketch l
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-27 | @cemililik (+ Claude Opus 4.7 agent) | Opened with status `Draft`, paired with ADR-0024 (`Proposed`) per ADR-0025 §Rule 1 (forward-reference contract) (ADR-0024's *Dependency chain* requires a real T-NNN file for the implementation step; this task is that file). Will move to `In Progress` only after ADR-0024 is `Accepted`. |
+| 2026-04-27 | @cemililik (+ Claude Opus 4.7 agent) | Promoted `Draft → In Progress → In Review` in a single arc (ADR-0024 became `Accepted` earlier the same day). Implementation: **`bsp-qemu-virt/src/boot.s`** — `_start` extended with K3-12 (`msr daifset, #0xf` as the very first instruction) + the EL drop dispatch (read `CurrentEL`, EL2 → configure HCR_EL2/SPSR_EL2/ELR_EL2 + `eret`, EL1 → fall through, EL3 → halt loudly via `wfe; b .-`). HCR_EL2 written with `RW=1` only — non-VHE EL1 explicit per ADR-0024. SPSR_EL2 = 0x3c5 carries DAIF=masked + mode=EL1h. **`hal/src/cpu.rs`** — new `pub fn current_el() -> u8` (cfg-gated to `target_arch = "aarch64"` + `target_os = "none"`); the safe-Rust wrapper around `MRS CurrentEL`. **`hal/src/lib.rs`** — `mod cpu;` → `pub mod cpu;` so `tyrne_hal::cpu::current_el()` is the public path the rest of the codebase calls (matches the existing `pub mod timer;` pattern). **`bsp-qemu-virt/src/cpu.rs`** — `QemuVirtCpu::new` now reads CurrentEL via the helper instead of duplicating the inline asm; UNSAFE-2026-0016 gains an Amendment recording both the load-bearing-post-condition shift and the helper-substitution. **Audit log** — UNSAFE-2026-0017 (boot.s reset-vector DAIF mask + EL2→EL1 transition; pure asm, two contiguous blocks) and UNSAFE-2026-0018 (the `current_el` helper; safe wrapper around the MRS) added per `unsafe-policy.md`. **Documentation** — `docs/architecture/boot.md` updated with the new three-phase `_start` description (K3-12 + EL drop + conventional setup), the line-by-line asm sample, and the new "kernel runs at EL1 unconditionally" invariant; `docs/standards/bsp-boot-checklist.md` §1 rewritten to describe the always-drop-to-EL1 procedure and gains a §1a (K3-12) covering the DAIF mask rule. **Verification** — `cargo fmt`, `cargo host-clippy`, `cargo kernel-clippy`, `cargo kernel-build`, `cargo host-test` (130 + 13 = 143 host tests), `cargo +nightly miri test` (143/143) all green. **QEMU smoke** — not run from this development environment (the harness here cannot drive `qemu-system-aarch64`); deferred to the maintainer or a CI runner. ADR-0008 (Cpu trait) was *not* extended with a `current_el` method — the free function was chosen per ADR-0024 §Open questions because the early-boot path needs to read the EL before any `Cpu` instance has been constructed and a trait method would force every test mock (`FakeCpu`, `ResetQueuesCpu`, test-hal's own mock) to declare an EL it does not really have. UNSAFE-2026-0016 stays load-bearing as an in-Rust post-condition. Status → `In Review`. |
