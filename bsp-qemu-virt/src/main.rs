@@ -229,23 +229,25 @@ static TASK_ARENA: StaticCell<TaskArena> = StaticCell::new();
 
 /// Kernel idle task — runs when no application task is ready.
 ///
-/// Per [ADR-0022], the BSP owns the idle entry. The loop is a
-/// `spin_loop` + `yield_now` — **not** `wfi` + `yield_now` — until a
-/// timer IRQ source lands (T-009). In the v1 workload there is no IRQ
-/// configured; a `wfi` here would suspend the core indefinitely the first
-/// time FIFO scheduling dispatches idle between two ready application
-/// tasks, hanging the demo. The spin-yield form keeps the kernel live and
-/// the demo's cooperative-round-trip trace intact, at the cost of one
-/// extra context switch per inter-task yield when idle happens to sit at
-/// the head of the ready queue. ADR-0022 *Revision notes* records this
-/// adjustment.
+/// Per [ADR-0022], the BSP owns the idle entry. The loop body is
+/// `cpu.wait_for_interrupt()` + `yield_now`: `WFI` suspends the core
+/// until any unmasked IRQ raises a wake, then the cooperative `yield_now`
+/// returns control to the FIFO scheduler. T-012 closed [ADR-0022]'s
+/// first-rider *Sub-rider* by landing both halves of the wake-source
+/// precondition — T-009's `CNTVCT_EL0` time source and T-012's GIC v2 +
+/// `VBAR_EL1` IRQ delivery — so this is now the form ADR-0022's
+/// *Decision outcome* originally specified. The interim `spin_loop` shape
+/// the first rider introduced is retired.
 ///
-/// When T-009 wires a timer IRQ (and a fallback wake source is guaranteed),
-/// this loop's body becomes `cpu.wait_for_interrupt(); yield_now(...)`.
-/// The shape of the function and its registration path stay the same.
+/// In v1's cooperative IPC demo, both application tasks are permanently
+/// `Ready` (each holds a tail-`spin_loop`-yield pattern), so the FIFO
+/// never reaches `idle_entry` — `WFI` here is structurally unreachable
+/// in the demo path. The change is observable only when a future caller
+/// arms a deadline via `arm_deadline` and idle is the head of the ready
+/// queue at that moment.
 ///
-/// Full IPC-graph deadlock (every task blocked + no IRQ source) is
-/// visible today as "idle spin-yielding forever", not a panic — the
+/// Full IPC-graph deadlock (every task blocked + no wake source ever
+/// fires) is visible today as "idle waiting forever", not a panic — the
 /// kernel stays live; typed `SchedError::Deadlock` is reachable only if
 /// the BSP did not register idle at all.
 ///
