@@ -19,6 +19,12 @@ SECTIONS {
 
     .text : {
         KEEP(*(.text.boot))
+        /* aarch64 EL1 exception vector table — VBAR_EL1 requires
+         * 2 KiB (2048-byte) alignment per ARM ARM §D11.2. The
+         * `.text.vectors` section holds the 16-entry table assembled
+         * in `src/vectors.s`; KEEP prevents linker GC. */
+        . = ALIGN(2048);
+        KEEP(*(.text.vectors))
         *(.text .text.*)
     } > RAM
 
