@@ -2,7 +2,7 @@
 
 - **Phase:** B
 - **Milestone:** B0 — Phase A exit hygiene
-- **Status:** Draft
+- **Status:** In Review
 - **Created:** 2026-04-27
 - **Author:** @cemililik (+ Claude Opus 4.7 agent)
 - **Dependencies:** T-006 (`Done` 2026-04-27), T-007 (`Done` 2026-04-27), T-009 (`Done` 2026-04-27) — the implementations whose design this task documents.
@@ -117,3 +117,4 @@ Beyond the acceptance criteria:
 | Date | Reviewer | Note |
 |------|----------|------|
 | 2026-04-27 | @cemililik (+ Claude Opus 4.7 agent) | Opened with status `Draft`. Last B0 task to gain a file (per the T-009 mini-retro's *Adjustments* item 3, now ✅ in the second follow-up note). Scope deliberately narrow: two new docs (scheduler.md + ipc.md) + small updates to hal.md and overview.md. boot.md update is T-013's, not T-008's. |
+| 2026-04-27 | @cemililik (+ Claude Opus 4.7 agent) | Implementation complete in a single arc. **`docs/architecture/scheduler.md`** (new, ~180 lines): FIFO + `ContextSwitch` + idle task + typed `SchedError::Deadlock` + raw-pointer bridge — synthesises ADR-0019/0020/0021/0022 plus T-004/T-006/T-007/T-011 with two Mermaid diagrams (data-structure + state machine). **`docs/architecture/ipc.md`** (new, ~190 lines): three-primitive set per ADR-0017 + endpoint state machine + slot-generation reset + capability transfer pre-flight + scheduler-bridge wrappers + BSP discipline — three Mermaid diagrams (state machine, generation-reset flow, sequence). **`docs/architecture/hal.md`**: Timer subsection expanded with the post-T-009 picture (CNTVCT register family per ADR-0010, helper functions, IRQ-armed half deferred to T-012). **`docs/architecture/overview.md`**: status banner noting Phase A complete + cross-links to scheduler.md / ipc.md from the responsibilities and IPC sections. **`docs/architecture/README.md`** index: scheduler.md and ipc.md added as Accepted; planned `kernel-core.md` and `scheduling.md` rows removed (subsumed). No new ADR — task documents existing Accepted ADRs only, per AC. No code changes — host tests still 143/143 green, kernel-build clean. Status → `In Review`. |

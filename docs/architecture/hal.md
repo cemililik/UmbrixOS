@@ -112,14 +112,20 @@ The kernel uses this trait from inside its minimal ISR, which is deliberately sh
 
 #### `Timer`
 
-Monotonic time and timed deadlines.
+Monotonic time and timed deadlines. Settled by [ADR-0010](../decisions/0010-timer-trait.md); the BSP-side implementation for QEMU virt landed in [T-009](../analysis/tasks/phase-b/T-009-timer-init-cntvct.md).
 
 - `now_ns() -> u64` — nanoseconds since boot, monotonic, never goes backwards across suspends.
-- Arm a one-shot deadline; arrival is delivered as an IRQ on the timer's line.
-- Cancel a deadline.
-- Expose the timer's resolution and its worst-case arming overhead as constants.
+- `arm_deadline(deadline_ns)` — arm a one-shot deadline; arrival is delivered as an IRQ on the timer's line.
+- `cancel_deadline()` — cancel a previously armed deadline.
+- `resolution_ns() -> u64` — the timer's minimum meaningful deadline granularity.
 
-The kernel uses this for scheduler tick, deadline-based wakeups, and the `time_now` / `time_sleep_until` syscalls.
+On aarch64 the BSP reads the **virtual** counter family — `CNTVCT_EL0` for the time source and `CNTV_CVAL_EL0` / `CNTV_CTL_EL0` for deadline arming — rather than the physical family (`CNTPCT_EL0`). The choice is recorded in [ADR-0010 §References](../decisions/0010-timer-trait.md) and re-confirmed in T-009's review-fix arc: the read side and the deferred deadline-arming side must live in the same register family, otherwise a non-zero `CNTVOFF_EL2` would silently desynchronise them. The full rationale is in [UNSAFE-2026-0015](../audits/unsafe-log.md) (the audit entry plus its two Amendments).
+
+Helper conversions live in `tyrne_hal::timer` — `ticks_to_ns(count, frequency_hz)` uses 128-bit intermediate arithmetic and a saturating cast back to `u64` so monotonicity holds at the wrap edge; `resolution_ns_for_freq(frequency_hz)` returns the round-to-nearest period in nanoseconds, clamped to a floor of 1 ns to keep callers from dividing by zero on >2 GHz counters. Both functions are pure, host-testable, and sit at 100 % region coverage per the [2026-04-27 coverage rerun](../analysis/reports/2026-04-27-coverage-rerun.md).
+
+The IRQ-armed half of the trait — `arm_deadline` / `cancel_deadline` — is `unimplemented!()` in QEMU virt's BSP today: it depends on the GIC + EL1 exception-vector-table install that [T-012](../analysis/tasks/phase-b/T-012-exception-and-irq-infrastructure.md) (B1) will land. The time-source half is fully wired and used by performance reviews and the boot-to-end timing instrumentation.
+
+The kernel will use this trait for scheduler tick, deadline-based wakeups, and the `time_now` / `time_sleep_until` syscalls. In v1 the read side is exercised by the BSP's boot-to-end measurement; the IRQ side is dormant until T-012.
 
 #### `Console`
 

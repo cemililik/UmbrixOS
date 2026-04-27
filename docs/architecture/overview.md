@@ -2,6 +2,8 @@
 
 Tyrne is a capability-based microkernel whose system structure is deliberately narrow at the privileged layer and arbitrarily rich in userspace. This document describes the three layers that make up the running system — kernel, hardware abstraction layer, and userspace — what crosses each boundary, and the paths a boot and a message follow through them. It is the first architecture document a reader should open; every other `docs/architecture/` document elaborates one of the pieces summarized here.
 
+> **Status (2026-04-27).** Phase A is complete: kernel boots on QEMU `virt` aarch64 (per [`boot.md`](boot.md)), the cooperative FIFO scheduler runs two tasks (per [`scheduler.md`](scheduler.md)), and the synchronous IPC primitive set delivers messages with capability transfer (per [`ipc.md`](ipc.md)). The kernel-internal control flow described below is implemented end-to-end for the two-task IPC demo; the userspace, syscall, and address-space layers below remain Phase B / Phase C work.
+
 ## Context
 
 The overall shape of Tyrne was fixed by the foundational ADRs:
@@ -51,8 +53,8 @@ flowchart TB
 The kernel is responsible for, and only for:
 
 1. **Capability management.** Creation, transfer, derivation, and revocation of [capabilities](../glossary.md). The capability table of every task lives in kernel-owned memory; the table is never writable from userspace.
-2. **Scheduling.** Choosing which runnable [thread](../glossary.md) executes on a CPU next; honouring priority and preemption policies.
-3. **IPC.** Transporting messages between tasks' address spaces, rendezvouing senders and receivers, and moving capabilities along with the messages.
+2. **Scheduling.** Choosing which runnable [thread](../glossary.md) executes on a CPU next; honouring priority and preemption policies. See [`scheduler.md`](scheduler.md) for the cooperative FIFO design and the raw-pointer bridge into IPC.
+3. **IPC.** Transporting messages between tasks' address spaces, rendezvouing senders and receivers, and moving capabilities along with the messages. See [`ipc.md`](ipc.md) for the primitive set, endpoint state machine, and capability-transfer protocol.
 4. **Virtual memory management.** Creating and destroying address spaces, installing translation table entries under capability control, managing physical page allocation at a low level.
 5. **Interrupt dispatch.** Trapping interrupts, performing the minimum work required to acknowledge the hardware, and turning the event into an asynchronous notification on an endpoint held by a userspace handler.
 
@@ -161,7 +163,7 @@ sequenceDiagram
     end
 ```
 
-Capabilities can be transferred **with** a message. The kernel validates that the sender holds the capabilities claimed and that the receiver's capability table has room; on success, the capabilities move atomically with the message. This transfer, combined with the rule that capabilities are move-only Rust types, is the vehicle by which authority flows around the system.
+Capabilities can be transferred **with** a message. The kernel validates that the sender holds the capabilities claimed and that the receiver's capability table has room; on success, the capabilities move atomically with the message. This transfer, combined with the rule that capabilities are move-only Rust types, is the vehicle by which authority flows around the system. The full state machine and pre-flight discipline is documented in [`ipc.md`](ipc.md).
 
 ### Address spaces
 
