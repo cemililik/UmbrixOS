@@ -148,11 +148,13 @@ jobs:
         # taiki-e/install-action downloads a prebuilt cargo-llvm-cov
         # binary instead of compiling from source. Two wins versus the
         # earlier `cargo install --locked`: (1) the version is pinned
-        # explicitly here, so an upstream cargo-llvm-cov release cannot
-        # silently change the coverage numbers; (2) it's a download
-        # rather than a 1-2 min compile, so the cache-miss path is fast.
-        # Bump CARGO_LLVM_COV_VERSION below in lockstep with NIGHTLY_PIN
-        # — see docs/guides/ci.md "Nightly pinning" for the procedure.
+        # explicitly on the `tool:` line below, so an upstream
+        # cargo-llvm-cov release cannot silently change the coverage
+        # numbers; (2) it's a download rather than a 1-2 min compile,
+        # so the cache-miss path is fast.
+        # The cargo-llvm-cov version pin is independent of NIGHTLY_PIN —
+        # the two can be bumped together or independently per
+        # docs/guides/ci.md "Nightly pinning".
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.6.16

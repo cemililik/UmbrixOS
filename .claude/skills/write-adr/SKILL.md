@@ -27,7 +27,7 @@ Before starting, the agent must have:
 3. **Copy the shape** from [`docs/decisions/template.md`](../../../docs/decisions/template.md). Do not skip sections.
 
 4. **Fill the header:**
-   - `Status: Proposed` (or `Accepted` if the decision is being recorded after the fact, with agreement from the maintainer).
+   - `Status: Proposed` (or `Accepted` if the decision is being recorded after the fact, with agreement from the maintainer — this is the *retroactive-recovery exception*; see anti-pattern 5 and the acceptance-criterion note below for how it reconciles with the "Accept is never in the same commit as the initial draft" rule. A retroactive ADR is a recovery move and must be marked explicitly in §Context.).
    - `Date:` today's date in ISO-8601 (`YYYY-MM-DD`).
    - `Deciders: @cemililik` (add others if applicable).
 

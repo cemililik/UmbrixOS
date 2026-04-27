@@ -88,7 +88,7 @@ pub const NANOS_PER_SECOND: u64 = 1_000_000_000;
 /// const context and an unfriendly runtime error otherwise).
 #[allow(
     clippy::cast_possible_truncation,
-    reason = "saturating cast handled explicitly by the if/else guard above"
+    reason = "saturating cast handled explicitly by the if/else guard at the end of this function"
 )]
 #[must_use]
 pub const fn ticks_to_ns(count: u64, frequency_hz: u64) -> u64 {

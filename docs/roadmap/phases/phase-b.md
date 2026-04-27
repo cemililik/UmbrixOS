@@ -239,7 +239,7 @@ When B6 is Done, run a business review. Phase C becomes active after that review
 | ADR-0023 | Cross-table capability revocation policy | B0 (accept-deferred expected) | new — from 2026-04-21 security review blocker #2 |
 | ADR-0024 | EL drop policy | B1 (Accepted 2026-04-27) | was ADR-0021 in the pre-review plan |
 | ADR-0025 | ADR governance amendments (forward-reference, riders) | meta-process (Accepted 2026-04-27) | new — captures the rules T-006/T-009 retros surfaced; not B-phase content. Cool-down rule withdrawn pre-Accept; see ADR-0025 §Revision notes |
-| ADR-0026 | Exception-vector-table / handler-dispatch shape (T-012, conditional) | B1 | reserved by T-012 if non-obvious choices arise; may go unused if T-011 absorbs the exception-vector design |
+| ADR-0026 | Exception-vector-table / handler-dispatch shape (T-012, conditional) | B1 | reserved by T-012 if non-obvious choices arise; may go unused if T-012 absorbs the exception-vector design without a separate ADR |
 | ADR-0027 | Kernel virtual memory layout | B2 | was ADR-0025 in the pre-2026-04-27 plan; renumbered down by 2 because ADR-0025 (governance) and ADR-0026 (T-012 reservation) consumed slots |
 | ADR-0028 | Address-space data structure | B3 | was ADR-0026 |
 | ADR-0029 | Initial userspace image format | B4 | was ADR-0027 |
