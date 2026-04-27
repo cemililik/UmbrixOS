@@ -2,7 +2,7 @@
 
 Tyrne's exception path is a 16-entry aarch64 vector table installed at `VBAR_EL1`, dispatching to one of four behaviours depending on the source class — synchronous exceptions (SVC, abort), IRQs (timer, GIC-routed device lines), FIQs (panic in v1), or SErrors (panic in v1). The IRQ path drives the GIC v2 controller on QEMU virt's `0x0800_0000` distributor + `0x0801_0000` CPU interface, acknowledging at entry, dispatching to a kernel handler, and signalling end-of-interrupt at exit. This document is the *how* for the design [T-012](../analysis/tasks/phase-b/T-012-exception-and-irq-infrastructure.md) implements; the *why* for each constituent ADR (HAL trait shape, EL drop policy, raw-pointer bridge interaction) lives in their respective ADRs.
 
-> **Status (2026-04-28).** T-012 is `In Progress` — this design doc lands first, ahead of the code, to satisfy the [B0 closure security review §8 recommendation](../analysis/reviews/security-reviews/2026-04-27-B0-closure.md) that architecture docs land *with* the code rather than as a follow-up. The implementation map below names what is and is not yet committed.
+> **Status (2026-04-28).** T-012 is `In Review` — this design doc was drafted first, ahead of the code, to satisfy the [B0 closure security review §8 recommendation](../analysis/reviews/security-reviews/2026-04-27-B0-closure.md) that architecture docs land *with* the code rather than as a follow-up. The implementation followed in three commits (`a043079` GIC + vector table, `b4ed68c` timer arm/cancel + irq_entry + idle WFI, `28c5ce9` documentation sweep). The implementation map below names which step landed in which commit. Maintainer-side QEMU smoke + Miri pass remain pending per the same disclaimer T-013 used.
 
 ## Context
 
@@ -203,7 +203,7 @@ This is structurally identical to the cooperative-bridge discipline; the differe
 
 ## Implementation map
 
-T-012's seven Approach steps, mapped to file changes. The first column is the step's status; items in parentheses are the audit-log entries each step introduces. The doc was originally drafted as design-first 2026-04-28 with all rows at 🔵/🟡/🟢; updated in the documentation-sweep commit (`<TBD-commit-3>`) to ✅ as the implementation commits landed.
+T-012's seven Approach steps, mapped to file changes. The first column is the step's status; items in parentheses are the audit-log entries each step introduces. The doc was originally drafted as design-first 2026-04-28 with all rows at 🔵/🟡/🟢; updated in the documentation-sweep commit (`28c5ce9`) to ✅ as the implementation commits landed.
 
 | # | Step | Status | Files |
 |---|------|--------|-------|
@@ -212,8 +212,8 @@ T-012's seven Approach steps, mapped to file changes. The first column is the st
 | 3 | Unmask `DAIF.I` after vector table installed | ✅ done (commit `a043079`) | `bsp-qemu-virt/src/main.rs` (`kernel_entry` `MSR DAIFClr, #0x2`) |
 | 4 | Generic-timer IRQ → real `arm_deadline` / `cancel_deadline` | ✅ done (commit `b4ed68c`) | `bsp-qemu-virt/src/cpu.rs` (Timer impl real bodies — `CNTV_CVAL_EL0` + `CNTV_CTL_EL0` + `gic.enable/disable`), `bsp-qemu-virt/src/exceptions.rs` (`irq_entry` ack-and-ignore on PPI 27); `sched::on_timer_irq` hook deferred — v1's IPC demo arms no deadline (UNSAFE-2026-0021 — `CNTV_CTL_EL0` / `CNTV_CVAL_EL0` writes) |
 | 5 | Idle's WFI activation | ✅ done (commit `b4ed68c`) | `bsp-qemu-virt/src/main.rs` (`idle_entry` body uses `cpu.wait_for_interrupt()` + `yield_now`) |
-| 6 | Audit-log entries + SAFETY comments | ✅ done (per-commit) | `docs/audits/unsafe-log.md` — UNSAFE-2026-0019 (commit `a043079`), UNSAFE-2026-0020 (commit `a043079`), UNSAFE-2026-0021 (commit `b4ed68c`); UNSAFE-2026-0014 Amendment naming `irq_entry` as a future site of the same momentary-`&mut` pattern (commit `<TBD-commit-3>`) |
-| 7 | Documentation sweep | ✅ done (commit `<TBD-commit-3>`) | This doc; ADR-0010 §Revision notes (deferred halves now live); ADR-0021 §Revision notes Amendment (IRQ-handler aliasing discipline); ADR-0022 first rider's *Sub-rider* closure paragraph |
+| 6 | Audit-log entries + SAFETY comments | ✅ done (per-commit) | `docs/audits/unsafe-log.md` — UNSAFE-2026-0019 (commit `a043079`), UNSAFE-2026-0020 (commit `a043079`), UNSAFE-2026-0021 (commit `b4ed68c`); UNSAFE-2026-0014 Amendment naming `irq_entry` as a future site of the same momentary-`&mut` pattern (commit `28c5ce9`) |
+| 7 | Documentation sweep | ✅ done (commit `28c5ce9`) | This doc; ADR-0010 §Revision notes (deferred halves now live); ADR-0021 §Revision notes Amendment (IRQ-handler aliasing discipline); ADR-0022 first rider's *Sub-rider* closure paragraph |
 
 T-012 lands `In Review` 2026-04-28 across three commits. Maintainer-side QEMU smoke + Miri pass remain pending per the same disclaimer T-013 used.
 
