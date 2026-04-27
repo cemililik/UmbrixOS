@@ -31,7 +31,7 @@ use core::fmt::Write;
 use core::mem::MaybeUninit;
 use core::panic::PanicInfo;
 
-use tyrne_hal::{Console, FmtWriter, Timer};
+use tyrne_hal::{Console, Cpu, FmtWriter, Timer};
 use tyrne_kernel::cap::{CapHandle, CapObject, CapRights, Capability, CapabilityTable};
 use tyrne_kernel::ipc::{IpcQueues, Message, RecvOutcome};
 use tyrne_kernel::obj::endpoint::{create_endpoint, Endpoint, EndpointArena};
@@ -256,7 +256,22 @@ fn idle_entry() -> ! {
     // Audit: UNSAFE-2026-0010.
     let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
     loop {
-        core::hint::spin_loop();
+        // T-012 step 5: idle waits for an interrupt instead of busy-
+        // spinning. `wait_for_interrupt` issues a `WFI` instruction
+        // which suspends the core until any unmasked IRQ raises a
+        // wake. Closes ADR-0022 first rider's *Sub-rider* gate ("WFI
+        // activation requires *two* tasks, not one") — the time-source
+        // half landed with T-009; the IRQ-delivery half landed with
+        // T-012's GIC + vector-table install (commit `a043079`).
+        //
+        // In v1, the cooperative IPC demo has both application tasks
+        // permanently `Ready` (each holds a tail-`spin_loop`-yield
+        // pattern), so the FIFO never reaches `idle_entry` — `WFI`
+        // here is structurally unreachable in the demo path. The
+        // change is observable only when a future caller arms a
+        // deadline via `arm_deadline` and idle is the head of the
+        // ready queue at that moment.
+        cpu.wait_for_interrupt();
         // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer
         // cast (UNSAFE-2026-0013); idle's stack frame holds no `&mut` to
         // any shared state across the cooperative switch. `yield_now`

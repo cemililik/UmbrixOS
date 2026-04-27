@@ -20,12 +20,19 @@
 //!
 //! [`docs/architecture/exceptions.md`]: https://github.com/cemililik/TyrneOS/blob/main/docs/architecture/exceptions.md
 
+use core::arch::asm;
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use tyrne_hal::IrqController;
 
 use crate::gic::QemuVirtGic;
 use crate::GIC;
+
+/// PPI 27 — the EL1 virtual generic-timer interrupt on QEMU virt's
+/// `GICv2`. Mirrors the constant in `cpu.rs::arm_deadline`; kept here
+/// because the IRQ-dispatch dispatch table is the natural home for
+/// recogniser constants.
+const TIMER_IRQ_ID: u32 = 27;
 
 /// Saved-register frame populated by the IRQ trampoline before it
 /// branches into [`irq_entry`].
@@ -145,15 +152,41 @@ pub extern "C" fn irq_entry(_frame: *mut TrapFrame) {
         return;
     };
 
-    // Dispatch on IRQ ID. v1's only enabled IRQ source will be the
-    // timer (T-012 step 4); until then, no IRQ is enabled at the
-    // GIC and `acknowledge` cannot return `Some`. If any IRQ ever
-    // fires through this path, the kernel cannot meaningfully
-    // continue — surface the unexpected IRQ loudly.
-    //
-    // Acknowledge is paired with end-of-interrupt before the panic
-    // so the GIC line stays consistent if a future panic-handler
-    // attempts recovery (none currently does).
+    // Dispatch on IRQ ID.
+    if irq.0 == TIMER_IRQ_ID {
+        // EL1 virtual generic timer (PPI 27).
+        //
+        // Mask the timer at the source so the same deadline does not
+        // re-fire before the next `arm_deadline` re-arm. We write
+        // `CNTV_CTL_EL0 = 0b10` (ENABLE = 0, IMASK = 1).
+        //
+        // SAFETY: `MSR x, CNTV_CTL_EL0` is the architected write to
+        // the EL1 virtual timer control register, available
+        // unconditionally at EL1 in the non-VHE configuration Tyrne
+        // runs in (per ADR-0024 + UNSAFE-2026-0017). The write does
+        // not touch memory; `options(nostack, nomem)` is correct.
+        // Audit: UNSAFE-2026-0021.
+        unsafe {
+            asm!(
+                "msr cntv_ctl_el0, {}",
+                in(reg) 2u64,
+                options(nostack, nomem),
+            );
+        }
+        // Signal end-of-interrupt to the GIC. v1 has no scheduler-
+        // side wake-on-deadline path yet (the timer is wired but no
+        // caller arms it in the cooperative IPC demo); future tasks
+        // that need preemption / `time_sleep_until` will add a
+        // `sched::on_timer_irq` hook here.
+        gic.end_of_interrupt(irq);
+        return;
+    }
+
+    // Any other IRQ — v1's GIC enables only the timer line, so this
+    // path is structurally unreachable. If we reach it, kernel state
+    // has been corrupted upstream; surface loudly. Acknowledge before
+    // panicking so the GIC line stays consistent if a future panic-
+    // handler attempts recovery (none currently does).
     let unhandled = irq.0;
     gic.end_of_interrupt(irq);
     panic!("irq_entry: unhandled IRQ {unhandled}");

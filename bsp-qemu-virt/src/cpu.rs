@@ -35,8 +35,17 @@
 
 use core::arch::{asm, naked_asm};
 
-use tyrne_hal::timer::{resolution_ns_for_freq, ticks_to_ns};
-use tyrne_hal::{ContextSwitch, CoreId, Cpu, IrqState, Timer};
+use tyrne_hal::timer::{ns_to_ticks, resolution_ns_for_freq, ticks_to_ns};
+use tyrne_hal::{ContextSwitch, CoreId, Cpu, IrqController, IrqNumber, IrqState, Timer};
+
+use crate::GIC;
+
+/// PPI 27 — the EL1 virtual generic-timer interrupt on QEMU virt's
+/// `GICv2`. Per ARM Generic Timer architecture (ARM ARM §D11) the EL1
+/// virtual timer raises this interrupt when `CNTVCT_EL0` reaches the
+/// programmed `CNTV_CVAL_EL0` value (with `CNTV_CTL_EL0.ENABLE = 1`
+/// and `CNTV_CTL_EL0.IMASK = 0`).
+const TIMER_IRQ: IrqNumber = IrqNumber(27);
 
 // ─── QemuVirtCpu ────────────────────────────────────────────────────────────
 
@@ -472,28 +481,76 @@ impl Timer for QemuVirtCpu {
         ticks_to_ns(count, self.frequency_hz)
     }
 
-    fn arm_deadline(&self, _deadline_ns: u64) {
-        // Deadline arming requires programming the generic-timer compare
-        // registers (`CNTV_CVAL_EL0` / `CNTV_CTL_EL0`) **and** routing the
-        // resulting IRQ via the GIC + interrupt-vector-table. T-009 scope
-        // (phase-b.md §B0 item 5) explicitly excludes IRQ wiring; the
-        // follow-up IRQ task will fill this method in. A silent no-op here
-        // would make a future caller think the deadline was armed when it
-        // was not, so this method panics loudly per unsafe-policy
-        // §"unimplemented surfaces".
-        unimplemented!(
-            "QemuVirtCpu::arm_deadline requires GIC + IVT wiring (a future B0 follow-up task); \
-             T-009 implements the measurement half of Timer only"
-        );
+    fn arm_deadline(&self, deadline_ns: u64) {
+        // Convert the absolute ns deadline to a CNTVCT-tick value.
+        // `ns_to_ticks` is the host-testable inverse of `ticks_to_ns`;
+        // saturating cast at the u128 boundary preserves monotonicity
+        // at the ~584-year extreme.
+        let target_ticks = ns_to_ticks(deadline_ns, self.frequency_hz);
+
+        // Step 1: Write the comparator (`CNTV_CVAL_EL0`).
+        // SAFETY: `MSR x, CNTV_CVAL_EL0` is the architected write to
+        // the EL1 virtual timer's compare register. At EL1 in the
+        // non-VHE configuration (per ADR-0024 + UNSAFE-2026-0017),
+        // CNTV_CVAL_EL0 is unconditionally writable — the
+        // `CNTHCTL_EL2.EL1{V,P}TEN` gating that exists in VHE mode
+        // does not apply. The instruction does not modify any other
+        // state; `options(nostack, nomem)` is correct.
+        // Audit: UNSAFE-2026-0021.
+        unsafe {
+            asm!(
+                "msr cntv_cval_el0, {}",
+                in(reg) target_ticks,
+                options(nostack, nomem),
+            );
+        }
+
+        // Step 2: Write `CNTV_CTL_EL0 = 0b01` (ENABLE = 1, IMASK = 0,
+        // ISTATUS bit ignored on write). This arms the timer; when
+        // CNTVCT_EL0 reaches CNTV_CVAL_EL0 the timer raises PPI 27.
+        // SAFETY: same EL1 / non-VHE preconditions as the CVAL write
+        // above. Audit: UNSAFE-2026-0021.
+        unsafe {
+            asm!(
+                "msr cntv_ctl_el0, {}",
+                in(reg) 1u64,
+                options(nostack, nomem),
+            );
+        }
+
+        // Step 3: Enable the timer's IRQ line at the GIC. Idempotent
+        // if already enabled.
+        // SAFETY: `GIC` is initialised in `kernel_entry` before any
+        // task runs (and therefore before any `arm_deadline` caller
+        // exists). Audit: UNSAFE-2026-0019 (GIC MMIO surface).
+        unsafe {
+            let gic = (*GIC.0.get()).assume_init_ref();
+            gic.enable(TIMER_IRQ);
+        }
     }
 
     fn cancel_deadline(&self) {
-        // See `arm_deadline` above; cancellation only makes sense once
-        // arming is wired. Deferred to the same follow-up task.
-        unimplemented!(
-            "QemuVirtCpu::cancel_deadline requires GIC + IVT wiring (a future B0 follow-up task); \
-             T-009 implements the measurement half of Timer only"
-        );
+        // Step 1: Mask + disable the timer at the source. Writing
+        // `CNTV_CTL_EL0 = 0b10` clears ENABLE and sets IMASK, so any
+        // already-pending delivery is also masked at the timer level.
+        // SAFETY: same EL1 / non-VHE preconditions as `arm_deadline`'s
+        // CTL write. Audit: UNSAFE-2026-0021.
+        unsafe {
+            asm!(
+                "msr cntv_ctl_el0, {}",
+                in(reg) 2u64,
+                options(nostack, nomem),
+            );
+        }
+
+        // Step 2: Disable the timer's IRQ line at the GIC.
+        // Idempotent if already disabled.
+        // SAFETY: see `arm_deadline`'s GIC interaction.
+        // Audit: UNSAFE-2026-0019.
+        unsafe {
+            let gic = (*GIC.0.get()).assume_init_ref();
+            gic.disable(TIMER_IRQ);
+        }
     }
 
     fn resolution_ns(&self) -> u64 {
