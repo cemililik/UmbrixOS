@@ -199,23 +199,23 @@ The same momentary-`&mut` discipline applies. The handler:
 2. Drops the `&mut` before any `eret` could land in user code that re-borrows.
 3. Uses `*mut Scheduler<C>` (via `StaticCell::as_mut_ptr`) for storage between calls.
 
-This is structurally identical to the cooperative-bridge discipline; the difference is that ISR re-entry is preemption-shaped, not yield-shaped. T-012 will likely ship an **ADR-0021 Amendment** (not a new ADR — same shared-state aliasing concern, same chosen solution shape) recording that the discipline extends to the IRQ-handler frame. UNSAFE-2026-0014 will gain a corresponding Amendment naming the new call site.
+This is structurally identical to the cooperative-bridge discipline; the difference is that ISR re-entry is preemption-shaped, not yield-shaped. T-012 ships an **[ADR-0021 §Revision notes Amendment (2026-04-27)](../decisions/0021-raw-pointer-scheduler-ipc-bridge.md#revision-notes)** (not a new ADR — same shared-state aliasing concern, same chosen solution shape) recording that the discipline extends to the IRQ-handler frame. UNSAFE-2026-0014 gains a corresponding Amendment naming `irq_entry` as a future site of the same pattern; v1's `irq_entry` body is *ack-and-ignore* and vacuously satisfies the discipline.
 
 ## Implementation map
 
-T-012's seven Approach steps, mapped to expected file changes. The first column is the step's status as of this design doc (2026-04-28); items in parentheses are the audit-log entries the step introduces.
+T-012's seven Approach steps, mapped to file changes. The first column is the step's status; items in parentheses are the audit-log entries each step introduces. The doc was originally drafted as design-first 2026-04-28 with all rows at 🔵/🟡/🟢; updated in the documentation-sweep commit (`<TBD-commit-3>`) to ✅ as the implementation commits landed.
 
 | # | Step | Status | Files |
 |---|------|--------|-------|
-| 1 | GIC v2 driver, no IRQs delivered yet | 🔵 next | `bsp-qemu-virt/src/gic.rs` (new), `mod gic;` in `main.rs` (UNSAFE-2026-0019 — GIC MMIO) |
-| 2 | `VBAR_EL1` install + minimum vector table (every entry → panic) | 🔵 next | `bsp-qemu-virt/src/boot.s` (extension), `bsp-qemu-virt/src/vectors.rs` (new) (UNSAFE-2026-0020 — vector table install + trampolines) |
-| 3 | Unmask `DAIF.I` after vector table installed | 🔵 next | `bsp-qemu-virt/src/main.rs` (`kernel_entry`) |
-| 4 | Generic-timer IRQ → real `arm_deadline` / `cancel_deadline` | 🟡 follows step 3 | `bsp-qemu-virt/src/cpu.rs` (Timer impl bodies), `kernel/src/sched/mod.rs` (`on_timer_irq` hook) (UNSAFE-2026-0021 — `CNTV_CTL_EL0` / `CNTV_CVAL_EL0` writes) |
-| 5 | Idle's WFI activation | 🟡 follows step 4 | `bsp-qemu-virt/src/main.rs` (`idle_entry` body) |
-| 6 | Audit-log entries + SAFETY comments | 🟢 in step | `docs/audits/unsafe-log.md` (each step introduces its entry alongside the code) |
-| 7 | Documentation sweep | 🟢 partially done (this doc) | `docs/architecture/exceptions.md` (this), ADR-0010 / 0021 / 0022 §Revision notes riders |
+| 1 | GIC v2 driver, no IRQs delivered yet | ✅ done (commit `a043079`) | `bsp-qemu-virt/src/gic.rs` (new), `mod gic;` in `main.rs` (UNSAFE-2026-0019 — GIC MMIO) |
+| 2 | `VBAR_EL1` install + minimum vector table | ✅ done (commit `a043079`) | `bsp-qemu-virt/src/vectors.s` (new — table at `tyrne_vectors` + trampolines), `bsp-qemu-virt/src/exceptions.rs` (Rust handlers + `TrapFrame`), `MSR VBAR_EL1` block in `kernel_entry` (UNSAFE-2026-0020 — vector table install + trampolines) |
+| 3 | Unmask `DAIF.I` after vector table installed | ✅ done (commit `a043079`) | `bsp-qemu-virt/src/main.rs` (`kernel_entry` `MSR DAIFClr, #0x2`) |
+| 4 | Generic-timer IRQ → real `arm_deadline` / `cancel_deadline` | ✅ done (commit `b4ed68c`) | `bsp-qemu-virt/src/cpu.rs` (Timer impl real bodies — `CNTV_CVAL_EL0` + `CNTV_CTL_EL0` + `gic.enable/disable`), `bsp-qemu-virt/src/exceptions.rs` (`irq_entry` ack-and-ignore on PPI 27); `sched::on_timer_irq` hook deferred — v1's IPC demo arms no deadline (UNSAFE-2026-0021 — `CNTV_CTL_EL0` / `CNTV_CVAL_EL0` writes) |
+| 5 | Idle's WFI activation | ✅ done (commit `b4ed68c`) | `bsp-qemu-virt/src/main.rs` (`idle_entry` body uses `cpu.wait_for_interrupt()` + `yield_now`) |
+| 6 | Audit-log entries + SAFETY comments | ✅ done (per-commit) | `docs/audits/unsafe-log.md` — UNSAFE-2026-0019 (commit `a043079`), UNSAFE-2026-0020 (commit `a043079`), UNSAFE-2026-0021 (commit `b4ed68c`); UNSAFE-2026-0014 Amendment naming `irq_entry` as a future site of the same momentary-`&mut` pattern (commit `<TBD-commit-3>`) |
+| 7 | Documentation sweep | ✅ done (commit `<TBD-commit-3>`) | This doc; ADR-0010 §Revision notes (deferred halves now live); ADR-0021 §Revision notes Amendment (IRQ-handler aliasing discipline); ADR-0022 first rider's *Sub-rider* closure paragraph |
 
-🔵 = next implementation commit; 🟡 = depends on prior steps; 🟢 = in-progress / partially done by this doc.
+T-012 lands `In Review` 2026-04-28 across three commits. Maintainer-side QEMU smoke + Miri pass remain pending per the same disclaimer T-013 used.
 
 ## Invariants
 
