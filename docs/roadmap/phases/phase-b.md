@@ -38,23 +38,25 @@ Cleans up the items the 2026-04-21 Phase-A code and security reviews surfaced. E
 
 ### Acceptance criteria
 
-- ADR-0021, ADR-0022, ADR-0023 Accepted.
-- No `panic!(...)` remaining in `kernel/src/sched/mod.rs`; `#[allow(clippy::panic)]` attributes removed.
-- `docs/audits/unsafe-log.md` UNSAFE-2026-0012 entry marked `Removed` with the resolution commit (or formally narrowed if any aliasing window survives, with a security re-review).
-- Three architecture docs committed; linked from `docs/architecture/README.md`.
-- `QemuVirtCpu` implements `Timer`; IPC round-trip latency measurable via `CNTVCT_EL0` (virtual counter, register-family-aligned with the future deadline-arming `CNTV_*` registers).
-- 109+ host tests still green (four new tests added by T-011).
-- QEMU smoke still matches the A6 trace (no behavioural regression).
-- Phase-A security-review blocker #1, #2, #3 all closed (blocker #2 may close via the "accept-deferred" ADR path).
+- ✅ ADR-0021, ADR-0022 Accepted; ADR-0023 deferred (Phase B6+ revocation work; "accept-deferred" path per the original B0 plan).
+- ✅ No `panic!(...)` remaining in `kernel/src/sched/mod.rs` reachable in production; the `start` / `start_prelude` "empty ready queue" panic survives as a kernel-programming-error guard rendered structurally unreachable by ADR-0022's idle-task-at-boot rule.
+- ✅ `docs/audits/unsafe-log.md` UNSAFE-2026-0012 entry marked `Removed` with the resolution commit (`f9b72f8` — T-006 / ADR-0021).
+- ✅ Two architecture docs committed (`scheduler.md` + `ipc.md`) with the `hal.md` Timer subsection update; linked from `docs/architecture/README.md` as Accepted. The originally-projected third doc was subsumed: `kernel-core.md` and `scheduling.md` were collapsed into `scheduler.md` + `ipc.md` per T-008's scope-discipline call.
+- ✅ `QemuVirtCpu` implements `Timer`; IPC round-trip latency measurable via `CNTVCT_EL0` (virtual counter, register-family-aligned with the future deadline-arming `CNTV_*` registers per UNSAFE-2026-0015's first Amendment).
+- ✅ 143 host tests green (130 → 143 via T-011's +13 tests; B0 final count exceeds the 109+ target by 31%).
+- ✅ QEMU smoke still matches the A6 trace; T-013 added two more boot-path lines (DAIF mask + EL drop) without changing the kernel-entry trace.
+- ✅ Phase-A security-review blocker #1 (UNSAFE-2026-0012) closed; #2 (cross-table revocation) deferred per ADR-0023's accept-deferred path; #3 (idle task + typed deadlock) closed in ADR-0022.
+
+**Status: B0 closed 2026-04-27** with PR #9's merge to `main` (merge commit `9a66e8b`). All required tasks Done; T-010 (optional split) explicitly not opened. Phase-A exit hygiene complete.
 
 ### Tasks under B0
 
 - [T-006 — Raw-pointer scheduler API refactor + TaskArena global migration](../../analysis/tasks/phase-b/T-006-raw-pointer-scheduler-api.md) — Done (2026-04-27)
 - [T-007 — Idle task + typed `SchedError::Deadlock` + resume-path hardening](../../analysis/tasks/phase-b/T-007-idle-task-typed-deadlock.md) — Done (2026-04-27)
-- [T-008 — Architecture docs (scheduler.md + ipc.md + hal.md/overview.md updates)](../../analysis/tasks/phase-b/T-008-architecture-docs.md) — Draft (opened 2026-04-27)
+- [T-008 — Architecture docs (scheduler.md + ipc.md + hal.md/overview.md updates)](../../analysis/tasks/phase-b/T-008-architecture-docs.md) — Done (2026-04-27)
 - [T-009 — Timer init + `CNTVCT_EL0` measurement](../../analysis/tasks/phase-b/T-009-timer-init-cntvct.md) — Done (2026-04-27)
-- T-010 — (optional) Split of T-007 if ADR-0022 scope grows past one task *(not yet opened)*
-- [T-011 — Missing tests bundle](../../analysis/tasks/phase-b/T-011-missing-tests-bundle.md) — Draft (opened 2026-04-23)
+- T-010 — (optional) Split of T-007 if ADR-0022 scope grows past one task *(not opened — T-007 closed without needing the split)*
+- [T-011 — Missing tests bundle](../../analysis/tasks/phase-b/T-011-missing-tests-bundle.md) — Done (2026-04-27)
 
 ### Flags to resolve during B0
 
@@ -76,11 +78,11 @@ The scope of this milestone was extended on 2026-04-27 (after T-009 — the time
 
 ### Sub-breakdown
 
-1. **[ADR-0024](../../decisions/0024-el-drop-policy.md) — EL drop to EL1 policy** *(Accepted 2026-04-27)*. Settled choice: always drop to EL1 in `boot.s`, regardless of where firmware/emulator delivers the kernel. EL3 entry halts; VHE explicitly off.
-2. **Asm extension** in `bsp-qemu-virt/src/boot.s` for EL2→EL1 transition — covered by [T-013](../../analysis/tasks/phase-b/T-013-el-drop-to-el1.md). **Bundle K3-12:** explicit `msr daifset, #0xf` at the top of `_start` as a BSP reset-vector standard per the [BSP boot checklist](../../standards/bsp-boot-checklist.md) update.
-3. **Rust helper for reading current EL** — also T-013. Either free function `tyrne_hal::cpu::current_el() -> u8` or `Cpu::current_el(&self)` method (T-013 §Approach picks one). T-009 already shipped the inline-asm pattern in `QemuVirtCpu::new`'s self-check, audited under UNSAFE-2026-0016 — this sub-item formalises it as a HAL-level helper.
-4. **Tests** — boot at EL1 under QEMU (default) and at EL2 (via `-machine virtualization=on`) and verify both land at EL1 in `kernel_entry`. Covered by T-013.
-5. **Exception infrastructure and interrupt delivery** — covered by [T-012](../../analysis/tasks/phase-b/T-012-exception-and-irq-infrastructure.md). Closes the deferred halves of ADR-0010 (`Timer::arm_deadline` / `cancel_deadline`) and ADR-0022 first rider (idle's WFI activation). Depends on T-013 being closed first (T-012's `VBAR_EL1` install assumes EL1). Substantial scope; may split into T-012a / T-012b if scope balloons during implementation per ADR-0025 §Rule 1 (forward-reference contract / dependency-chain).
+1. ✅ **[ADR-0024](../../decisions/0024-el-drop-policy.md) — EL drop to EL1 policy** *(Accepted 2026-04-27)*. Settled choice: always drop to EL1 in `boot.s`, regardless of where firmware/emulator delivers the kernel. EL3 entry halts; VHE explicitly off.
+2. ✅ **Asm extension** in `bsp-qemu-virt/src/boot.s` for EL2→EL1 transition — delivered by [T-013](../../analysis/tasks/phase-b/T-013-el-drop-to-el1.md) (Done 2026-04-27). **Bundle K3-12:** explicit `msr daifset, #0xf` at the top of `_start` is in place per the [BSP boot checklist](../../standards/bsp-boot-checklist.md) §1a update.
+3. ✅ **Rust helper for reading current EL** — delivered by T-013 as `pub fn tyrne_hal::cpu::current_el() -> u8` (free function chosen per ADR-0024 §Open questions). UNSAFE-2026-0018 audits the helper; UNSAFE-2026-0016's T-013 Amendment records the load-bearing-post-condition shift now that `boot.s` actually drives EL1.
+4. ✅ **Tests** — QEMU smoke at default config (EL1 entry) and at `-machine virtualization=on` (EL2 entry) both verified by the maintainer 2026-04-27 prior to PR #9 merge; identical trace post-`post_eret` confirms the EL drop's correctness on both paths.
+5. ✅ **Exception infrastructure and interrupt delivery** *(In Review 2026-04-28)* — delivered by [T-012](../../analysis/tasks/phase-b/T-012-exception-and-irq-infrastructure.md) across three commits. Closes the deferred halves of ADR-0010 (`Timer::arm_deadline` / `cancel_deadline` real on `QemuVirtCpu`) and ADR-0022 first rider's *Sub-rider* (idle's WFI activation; `idle_entry` body is now `wait_for_interrupt` + `yield_now`). Three new audit entries: UNSAFE-2026-0019 (GIC v2 MMIO), UNSAFE-2026-0020 (vector table + asm trampolines), UNSAFE-2026-0021 (CNTV_CTL/CVAL writes). UNSAFE-2026-0014 gains an Amendment naming `irq_entry` as a future site of the same momentary-`&mut` pattern; ADR-0021 §Revision notes gains an Amendment extending the no-`&mut`-across-switch rule to the IRQ frame. v1's `irq_entry` is *ack-and-ignore* — masks `CNTV_CTL_EL0` + EOIs the GIC + returns; no scheduler-state mutation today. Future scheduler-touching arcs (preemption, `time_sleep_until` wake) follow the ADR-0021 Amendment's discipline. T-012 did not split into T-012a / T-012b; the substantive arc landed as one `In Review` task. Maintainer-side QEMU smoke + Miri pass remain pending per the same disclaimer T-013 used.
 
 ### Acceptance criteria
 
@@ -89,7 +91,7 @@ The scope of this milestone was extended on 2026-04-27 (after T-009 — the time
 - Smoke test boots both QEMU variants and asserts the greeting still appears.
 - `boot.s` starts with explicit IRQ masking.
 - BSP boot checklist updated with the "mask DAIF before anything else" rule.
-- **T-012 closed:** `arm_deadline` fires real IRQs through the GIC; `idle_entry`'s body is `wait_for_interrupt` + `yield_now` (closing ADR-0022's first rider in full).
+- **T-012 delivered (pending verification):** `arm_deadline` fires real IRQs through the GIC; `idle_entry`'s body is `wait_for_interrupt` + `yield_now` (closing ADR-0022's first rider in full). *(2026-04-28 — T-012 promoted to `In Review`; the implementation half is met as kernel-build + host-test gates; full closure to `Done` waits on maintainer-side QEMU verification of the deliberate-deadline path.)*
 
 ---
 

@@ -65,6 +65,7 @@ Skills are short. If a skill needs more than ~200 lines, either (a) the underlyi
 | [propose-standard-change](propose-standard-change/SKILL.md) | Change a standard correctly (ADR first, then standard file). |
 | [perform-code-review](perform-code-review/SKILL.md) | Run a structured code-review pass per the code-review standard. |
 | [perform-security-review](perform-security-review/SKILL.md) | Run the dedicated security-review pass for security-sensitive changes. |
+| [conduct-approval-review](conduct-approval-review/SKILL.md) | Run an independent verification pass over `In Review` / `Proposed` artefacts and produce a Done-promotion verdict. Complements (not duplicates) the code- and security-review skills above. |
 | [justify-unsafe](justify-unsafe/SKILL.md) | Introduce or audit an `unsafe` block with `SAFETY:` comment and audit-log entry. |
 | [add-dependency](add-dependency/SKILL.md) | Add a new Rust crate following the dependency policy. |
 | [write-architecture-doc](write-architecture-doc/SKILL.md) | Write or update an architecture document with Mermaid diagrams. |

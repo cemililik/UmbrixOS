@@ -32,3 +32,4 @@ A security review is a **separate pass** from the code review — it is performe
 | Date | Scope | Verdict | File |
 |------|-------|---------|------|
 | 2026-04-21 | Tyrne project → Phase A exit (Phase 1–4c bootstrap + A1–A6 kernel core) | Changes requested (3 Phase-B blockers; no Phase-A exit blocker) | [2026-04-21-tyrne-to-phase-a.md](2026-04-21-tyrne-to-phase-a.md) |
+| 2026-04-27 | B0 closure consolidated pass (T-006/T-007/T-008/T-009/T-011/T-013 + ADR-0021/0022/0024/0025 + UNSAFE-2026-0013..0018) | Clean — no Yüksek findings; pre-existing items (cross-table revocation, generation overflow) tracked at original severity | [2026-04-27-B0-closure.md](2026-04-27-B0-closure.md) |
