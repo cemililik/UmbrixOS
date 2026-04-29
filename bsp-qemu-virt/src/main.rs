@@ -31,7 +31,7 @@ use core::fmt::Write;
 use core::mem::MaybeUninit;
 use core::panic::PanicInfo;
 
-use tyrne_hal::{Console, FmtWriter, Timer};
+use tyrne_hal::{Console, Cpu, FmtWriter, Timer};
 use tyrne_kernel::cap::{CapHandle, CapObject, CapRights, Capability, CapabilityTable};
 use tyrne_kernel::ipc::{IpcQueues, Message, RecvOutcome};
 use tyrne_kernel::obj::endpoint::{create_endpoint, Endpoint, EndpointArena};
@@ -40,9 +40,12 @@ use tyrne_kernel::sched::{ipc_recv_and_yield, ipc_send_and_yield, start, yield_n
 
 mod console;
 mod cpu;
+mod exceptions;
+mod gic;
 
 use console::Pl011Uart;
 use cpu::QemuVirtCpu;
+use gic::{QemuVirtGic, QEMU_VIRT_GIC_CPU_INTERFACE_BASE, QEMU_VIRT_GIC_DISTRIBUTOR_BASE};
 
 /// MMIO base of the QEMU `virt` machine's PL011 UART.
 ///
@@ -176,6 +179,12 @@ static SCHED: StaticCell<Scheduler<QemuVirtCpu>> = StaticCell::new();
 /// The CPU handle — needed by `yield_now` and IPC bridge to mask IRQs.
 static CPU: StaticCell<QemuVirtCpu> = StaticCell::new();
 
+/// The GIC v2 controller handle. Constructed once in `kernel_entry`
+/// and accessed via `&` from `irq_entry` (the asm-trampoline-side
+/// dispatcher in `src/exceptions.rs`). Pre-T-012 v1 had no IRQ source;
+/// T-012 lights this up alongside the vector-table install.
+static GIC: StaticCell<QemuVirtGic> = StaticCell::new();
+
 /// The PL011 console — used by task functions for diagnostic output.
 static CONSOLE: StaticCell<Pl011Uart> = StaticCell::new();
 
@@ -220,23 +229,25 @@ static TASK_ARENA: StaticCell<TaskArena> = StaticCell::new();
 
 /// Kernel idle task — runs when no application task is ready.
 ///
-/// Per [ADR-0022], the BSP owns the idle entry. The loop is a
-/// `spin_loop` + `yield_now` — **not** `wfi` + `yield_now` — until a
-/// timer IRQ source lands (T-009). In the v1 workload there is no IRQ
-/// configured; a `wfi` here would suspend the core indefinitely the first
-/// time FIFO scheduling dispatches idle between two ready application
-/// tasks, hanging the demo. The spin-yield form keeps the kernel live and
-/// the demo's cooperative-round-trip trace intact, at the cost of one
-/// extra context switch per inter-task yield when idle happens to sit at
-/// the head of the ready queue. ADR-0022 *Revision notes* records this
-/// adjustment.
+/// Per [ADR-0022], the BSP owns the idle entry. The loop body is
+/// `cpu.wait_for_interrupt()` + `yield_now`: `WFI` suspends the core
+/// until any unmasked IRQ raises a wake, then the cooperative `yield_now`
+/// returns control to the FIFO scheduler. T-012 closed [ADR-0022]'s
+/// first-rider *Sub-rider* by landing both halves of the wake-source
+/// precondition — T-009's `CNTVCT_EL0` time source and T-012's GIC v2 +
+/// `VBAR_EL1` IRQ delivery — so this is now the form ADR-0022's
+/// *Decision outcome* originally specified. The interim `spin_loop` shape
+/// the first rider introduced is retired.
 ///
-/// When T-009 wires a timer IRQ (and a fallback wake source is guaranteed),
-/// this loop's body becomes `cpu.wait_for_interrupt(); yield_now(...)`.
-/// The shape of the function and its registration path stay the same.
+/// In v1's cooperative IPC demo, both application tasks are permanently
+/// `Ready` (each holds a tail-`spin_loop`-yield pattern), so the FIFO
+/// never reaches `idle_entry` — `WFI` here is structurally unreachable
+/// in the demo path. The change is observable only when a future caller
+/// arms a deadline via `arm_deadline` and idle is the head of the ready
+/// queue at that moment.
 ///
-/// Full IPC-graph deadlock (every task blocked + no IRQ source) is
-/// visible today as "idle spin-yielding forever", not a panic — the
+/// Full IPC-graph deadlock (every task blocked + no wake source ever
+/// fires) is visible today as "idle waiting forever", not a panic — the
 /// kernel stays live; typed `SchedError::Deadlock` is reachable only if
 /// the BSP did not register idle at all.
 ///
@@ -247,7 +258,22 @@ fn idle_entry() -> ! {
     // Audit: UNSAFE-2026-0010.
     let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
     loop {
-        core::hint::spin_loop();
+        // T-012 step 5: idle waits for an interrupt instead of busy-
+        // spinning. `wait_for_interrupt` issues a `WFI` instruction
+        // which suspends the core until any unmasked IRQ raises a
+        // wake. Closes ADR-0022 first rider's *Sub-rider* gate ("WFI
+        // activation requires *two* tasks, not one") — the time-source
+        // half landed with T-009; the IRQ-delivery half landed with
+        // T-012's GIC + vector-table install (commit `a043079`).
+        //
+        // In v1, the cooperative IPC demo has both application tasks
+        // permanently `Ready` (each holds a tail-`spin_loop`-yield
+        // pattern), so the FIFO never reaches `idle_entry` — `WFI`
+        // here is structurally unreachable in the demo path. The
+        // change is observable only when a future caller arms a
+        // deadline via `arm_deadline` and idle is the head of the
+        // ready queue at that moment.
+        cpu.wait_for_interrupt();
         // SAFETY: per ADR-0021 — `SCHED.as_mut_ptr()` is a pure pointer
         // cast (UNSAFE-2026-0013); idle's stack frame holds no `&mut` to
         // any shared state across the cooperative switch. `yield_now`
@@ -451,6 +477,17 @@ fn task_a() -> ! {
 // Reset entry (`_start`). See `boot.s` and `docs/architecture/boot.md`.
 global_asm!(include_str!("boot.s"));
 
+// EL1 exception vector table (`tyrne_vectors`). See `vectors.s` and
+// `docs/architecture/exceptions.md`. Audit: UNSAFE-2026-0020.
+global_asm!(include_str!("vectors.s"));
+
+extern "C" {
+    /// Symbol exported by `vectors.s`; resolves to the 2 KiB-aligned
+    /// base of the EL1 vector table. Written to `VBAR_EL1` once at
+    /// boot.
+    static tyrne_vectors: u8;
+}
+
 /// First Rust entry after the assembly stub.
 ///
 /// Sets up the console, CPU, kernel objects, capability tables, IPC
@@ -487,6 +524,78 @@ pub extern "C" fn kernel_entry() -> ! {
     let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
 
     console.write_bytes(b"tyrne: hello from kernel_main\n");
+
+    // ── Exception vector table install + GIC init (T-012) ────────────────────
+    //
+    // Sequence (per docs/architecture/exceptions.md §"Implementation map"):
+    //   1. Install VBAR_EL1 with the 2 KiB-aligned `tyrne_vectors` base
+    //      (assembled in src/vectors.s). After this, any exception taken
+    //      while DAIF is still masked still gets caught — the panic-class
+    //      trampolines fire instead of fetching from VBAR's reset value.
+    //   2. Construct + init the GIC v2 controller. `init` disables every
+    //      SPI, sets default priorities, routes SPIs to CPU 0, then
+    //      enables the distributor + CPU interface. No IRQ source is
+    //      enabled at this point — `enable(IrqNumber)` is a separate call.
+    //   3. Unmask DAIF.I (clear the I bit only — D, A, F stay masked).
+    //      With nothing enabled at the GIC, this is a no-op for IRQ
+    //      delivery; future `enable` calls will deliver IRQs through the
+    //      now-installed vector table.
+    //
+    // Order matters: vector table → GIC init → DAIF unmask. If GIC init
+    // were first, a fault in init() would jump to the un-installed vector
+    // and silently hang. Installing the vector table first guarantees
+    // visible failure for any later boot bug.
+
+    // SAFETY: `tyrne_vectors` is exported by src/vectors.s as the
+    // 2 KiB-aligned base of the EL1 vector table. `MSR VBAR_EL1, x`
+    // is privileged at EL1 (always available); the write does not
+    // mutate any other state and `options(nostack, nomem)` is correct
+    // (the asm reads no memory, writes no stack). Audit: UNSAFE-2026-0020.
+    unsafe {
+        let vbar_addr = core::ptr::addr_of!(tyrne_vectors) as u64;
+        core::arch::asm!(
+            "msr vbar_el1, {0}",
+            "isb",
+            in(reg) vbar_addr,
+            options(nostack, nomem),
+        );
+    }
+
+    // SAFETY: QEMU virt's GICv2 distributor + CPU interface live at
+    // their well-known MMIO bases (per ADR-0011 references and the
+    // QemuVirtGic module-level docs); single-core v1 means no
+    // concurrent writer exists. The construction itself does no MMIO.
+    // Audit: UNSAFE-2026-0019.
+    let gic = unsafe {
+        QemuVirtGic::new(
+            QEMU_VIRT_GIC_DISTRIBUTOR_BASE,
+            QEMU_VIRT_GIC_CPU_INTERFACE_BASE,
+        )
+    };
+    // SAFETY: single-core; no concurrent writer to GIC static yet.
+    // Audit: UNSAFE-2026-0001 (StaticCell pattern) + UNSAFE-2026-0019.
+    unsafe { (*GIC.0.get()).write(gic) };
+
+    // SAFETY: GIC was just published. `init` performs the boot-time
+    // MMIO programming sequence per its doc; DAIF still masked, so no
+    // IRQ can fire mid-init. Audit: UNSAFE-2026-0019.
+    unsafe {
+        let gic_ref = (*GIC.0.get()).assume_init_ref();
+        gic_ref.init();
+    }
+
+    // SAFETY: With the vector table installed and the GIC initialised
+    // (but no IRQ enabled at the GIC), unmasking DAIF.I is safe — no
+    // IRQ source can fire until a later `gic.enable(...)` call. The
+    // other DAIF bits (D, A, F) stay masked.
+    //
+    // `MSR DAIFClr, #0x2` clears the I bit specifically (bit value
+    // matches PSTATE.DAIF[1]; cf. ARM ARM §C5.2.7). `options(nostack,
+    // nomem)` is correct.
+    // Audit: UNSAFE-2026-0020.
+    unsafe {
+        core::arch::asm!("msr daifclr, #0x2", options(nostack, nomem),);
+    }
 
     // ── Timer banner + boot timestamp (T-009) ───────────────────────────────
     //

@@ -152,9 +152,69 @@ pub const fn resolution_ns_for_freq(frequency_hz: u64) -> u64 {
     }
 }
 
+/// Convert nanoseconds to ticks at the given counter frequency.
+///
+/// The inverse of [`ticks_to_ns`]; used by `Timer::arm_deadline`
+/// implementations to translate an absolute deadline (in nanoseconds
+/// since boot) into a comparator-register value (in counter ticks).
+///
+/// Per ADR-0010 §Decision outcome, `Timer::arm_deadline`'s argument
+/// is `deadline_ns: u64` — an absolute monotonic time in ns. The
+/// hardware timer's compare register (`CNTV_CVAL_EL0` on aarch64,
+/// equivalent on other targets) is in counter ticks; this function
+/// is the conversion at the BSP boundary.
+///
+/// # Rounding
+///
+/// Uses **ceiling division** so that any sub-tick remainder rounds up
+/// to the next tick. This is the rounding direction required by
+/// ADR-0010 §Decision outcome's "When `now_ns()` reaches or exceeds
+/// `deadline_ns`, the hardware timer IRQ fires" — flooring would arm
+/// the comparator at the largest tick whose `ticks_to_ns` is ≤
+/// `deadline_ns`, which can fire the IRQ up to one sub-tick *before*
+/// `deadline_ns`, violating the "reaches or exceeds" contract. With
+/// ceiling, the comparator's tick-equivalent is always ≥
+/// `deadline_ns`, so the IRQ fires at-or-after the requested time.
+///
+/// # Saturation
+///
+/// Uses 128-bit intermediate arithmetic and a saturating cast back
+/// to `u64`. For pathological inputs where `ceil(ns * frequency_hz /
+/// 1e9)` exceeds `u64::MAX` (~584 years × 1 GHz, or any frequency
+/// above 1e9 Hz with `ns ≈ u64::MAX`), the returned tick count
+/// saturates at `u64::MAX`. Matches [`ticks_to_ns`]'s saturation
+/// discipline.
+///
+/// # Panics
+///
+/// Panics with a named message if `frequency_hz == 0`. Same explicit
+/// `assert!` as [`ticks_to_ns`] — see its `# Panics` section for the
+/// reasoning.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "saturating cast handled explicitly by the if/else guard at the end of this function"
+)]
+#[must_use]
+pub const fn ns_to_ticks(ns: u64, frequency_hz: u64) -> u64 {
+    assert!(
+        frequency_hz != 0,
+        "ns_to_ticks: frequency_hz must be > 0 (BSP must validate CNTFRQ_EL0 / equivalent at boot)",
+    );
+    let intermediate = (ns as u128) * (frequency_hz as u128);
+    let nanos = NANOS_PER_SECOND as u128;
+    // Ceiling division so any sub-tick remainder rounds up to the
+    // next tick (see § Rounding above).
+    let ticks = intermediate.div_ceil(nanos);
+    if ticks > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        ticks as u64
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{resolution_ns_for_freq, ticks_to_ns, NANOS_PER_SECOND};
+    use super::{ns_to_ticks, resolution_ns_for_freq, ticks_to_ns, NANOS_PER_SECOND};
 
     // ── ticks_to_ns ──────────────────────────────────────────────────────────
 
@@ -350,5 +410,75 @@ mod tests {
     #[should_panic(expected = "resolution_ns_for_freq: frequency_hz must be > 0")]
     fn resolution_ns_for_freq_panics_on_zero_frequency() {
         let _ = resolution_ns_for_freq(0);
+    }
+
+    // ── ns_to_ticks ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ns_to_ticks_zero_ns_is_zero() {
+        assert_eq!(ns_to_ticks(0, 62_500_000), 0);
+    }
+
+    #[test]
+    fn ns_to_ticks_rounds_up_on_subtick() {
+        // Locks the ceiling-rounding policy documented in the
+        // `# Rounding` doc-section: any sub-tick remainder must round
+        // *up* so the comparator's tick-equivalent is ≥ deadline_ns.
+        // freq = 3 Hz means one tick = NANOS_PER_SECOND / 3 =
+        // 333_333_333.333… ns; ns = 333_333_333 sits exactly on tick 1
+        // (down) and ns = 333_333_334 is 1 ns past it, so the ceiling
+        // tick count is 2. A floor-division regression would return 1
+        // here and silently violate the "reaches or exceeds
+        // deadline_ns" half of ADR-0010's contract.
+        assert_eq!(ns_to_ticks(333_333_334, 3), 2);
+        // Boundary check: exactly on the first tick stays at 1 tick.
+        assert_eq!(ns_to_ticks(333_333_333, 3), 1);
+    }
+
+    #[test]
+    fn ns_to_ticks_round_trips_against_ticks_to_ns_at_qemu_frequency() {
+        // QEMU virt is 62.5 MHz; pick a tick count that is exactly
+        // representable in ns (the inverse uses integer truncation,
+        // so non-divisor frequencies introduce a small drift —
+        // tested separately).
+        let qemu_freq = 62_500_000;
+        let count = 1_234_567;
+        let ns = ticks_to_ns(count, qemu_freq);
+        let round_trip_ticks = ns_to_ticks(ns, qemu_freq);
+        assert_eq!(round_trip_ticks, count);
+    }
+
+    #[test]
+    fn ns_to_ticks_one_second_yields_frequency_at_any_freq() {
+        // 1 second = `frequency_hz` ticks, exactly, for any non-zero
+        // frequency.
+        for &freq in &[1u64, 1_000, 19_200_000, 62_500_000, 1_000_000_000] {
+            assert_eq!(ns_to_ticks(NANOS_PER_SECOND, freq), freq);
+        }
+    }
+
+    #[test]
+    fn ns_to_ticks_saturates_at_u64_max() {
+        // ns close to u64::MAX with a high frequency overflows the
+        // u128 intermediate's u64 result; the function must saturate
+        // rather than wrap.
+        let huge_ns = u64::MAX;
+        let high_freq = 1_000_000_000;
+        assert_eq!(ns_to_ticks(huge_ns, high_freq), u64::MAX);
+
+        // Exercise the saturation *branch* (not just the boundary):
+        // pick a frequency strictly greater than NANOS_PER_SECOND so
+        // the u128 quotient `ceil(ns * freq / 1e9)` exceeds u64::MAX
+        // and the `if ticks > u64::MAX as u128` branch executes.
+        let over_boundary_freq = 1_000_000_001;
+        assert_eq!(ns_to_ticks(huge_ns, over_boundary_freq), u64::MAX);
+        // Also verify the maximum possible frequency saturates.
+        assert_eq!(ns_to_ticks(huge_ns, u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "ns_to_ticks: frequency_hz must be > 0")]
+    fn ns_to_ticks_panics_on_zero_frequency() {
+        let _ = ns_to_ticks(1, 0);
     }
 }
