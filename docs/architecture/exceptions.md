@@ -168,19 +168,7 @@ v1's body is *ack-and-ignore*: no `sched::on_timer_irq` hook is invoked and no s
 
 ### Idle's `wfi` activation
 
-Once the timer IRQ is wired, idle's body changes from:
-
-```rust
-fn idle_entry() -> ! {
-    let cpu = unsafe { (*CPU.0.get()).assume_init_ref() };
-    loop {
-        core::hint::spin_loop();
-        unsafe { yield_now(SCHED.as_mut_ptr(), cpu).expect("idle: yield_now failed"); }
-    }
-}
-```
-
-to:
+Idle's body uses `WFI` as the default wake strategy — the form ADR-0022's *Decision outcome* originally specified, now shipped:
 
 ```rust
 fn idle_entry() -> ! {
@@ -192,7 +180,11 @@ fn idle_entry() -> ! {
 }
 ```
 
-This closes ADR-0022 first rider's *Sub-rider* gate. The timer IRQ is the wake source: a periodic re-arm (or a one-shot from a sleeping task's `time_sleep_until` syscall, when those land in B5) keeps idle's `wfi` from blocking indefinitely. Until T-012's full set lands, idle stays in the `spin_loop` form.
+T-012's commit `b4ed68c` flipped `idle_entry`'s body from the interim `core::hint::spin_loop()` shape (the ADR-0022 first-rider workaround that absorbed the missing wake source) to the `wait_for_interrupt()` shape above. **This closes ADR-0022 first rider's *Sub-rider* gate** — the gate was "WFI activation requires *two* tasks, not one", phrased differently as "WFI requires a wake source"; T-009 landed the time-source half (via `CNTVCT_EL0`) and T-012 landed the IRQ-delivery half (via the GIC v2 + vector-table install in this document). The timer IRQ is the wake source: any future arc that calls `Timer::arm_deadline` (a `time_sleep_until` syscall in B5+, a preemption tick in B-late) provides a deterministic deadline; without such a caller the WFI sits in idle indefinitely, which is correct behaviour for a kernel with nothing to do.
+
+In v1's cooperative IPC demo specifically, both application tasks are permanently `Ready` (each ends in a tail-`spin_loop`-yield pattern), so the FIFO never reaches `idle_entry` — `WFI` here is structurally unreachable along the demo path, observable only when a future caller arms a deadline and idle is the head of the ready queue at that moment. The shipped change is therefore observable as a code-shape change, not a behavioural change in the v1 trace.
+
+**Remaining T-012 items are separate from this section's scope.** Maintainer-side QEMU smoke verification of the deliberate-deadline path and the Miri pass on host tests are pre-closure work-items tracked in the [B1 closure retrospective's Adjustments](../analysis/reviews/business-reviews/2026-04-28-B1-closure.md) and in the `Pending QEMU smoke verification` status notes on UNSAFE-2026-0019 / 0020 / 0021; lifted via append-only Amendment after the smoke run.
 
 ### IRQ-handler interaction with the raw-pointer scheduler bridge
 
